@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import fs from 'fs';
+import ffmpegStatic from 'ffmpeg-static';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,7 +112,11 @@ ipcMain.handle('export-clips', async (event, { videoPath, outputDir, clips, qual
 
         // Run FFmpeg
         await new Promise((res, rej) => {
-          const ffmpeg = spawn('ffmpeg', ffmpegArgs);
+          let resolvedFfmpegPath = ffmpegStatic;
+          if (resolvedFfmpegPath.includes('app.asar')) {
+            resolvedFfmpegPath = resolvedFfmpegPath.replace('app.asar', 'app.asar.unpacked');
+          }
+          const ffmpeg = spawn(resolvedFfmpegPath, ffmpegArgs);
 
           ffmpeg.on('close', (code) => {
             if (code === 0) {

@@ -35,13 +35,27 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
+  autoUpdater.autoDownload = false;
   autoUpdater.checkForUpdatesAndNotify();
+
+  autoUpdater.on('update-available', () => {
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Actualización Disponible',
+      message: 'Una nueva versión de CutterGold está disponible. ¿Deseas descargarla e instalarla ahora?',
+      buttons: ['Sí, descargar', 'No, gracias']
+    }).then(result => {
+      if (result.response === 0) {
+        autoUpdater.downloadUpdate();
+      }
+    });
+  });
 
   autoUpdater.on('update-downloaded', () => {
     dialog.showMessageBox({
       type: 'info',
       title: 'Actualización lista',
-      message: 'Una nueva versión de CutterGold se ha descargado. ¿Deseas instalarla y reiniciar ahora?',
+      message: 'La actualización se ha descargado y está lista para instalarse. ¿Deseas reiniciar ahora?',
       buttons: ['Reiniciar y Actualizar', 'Más tarde']
     }).then(result => {
       if (result.response === 0) {

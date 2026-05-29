@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import ffmpegStatic from 'ffmpeg-static';
+import ytDlp from 'yt-dlp-exec';
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
 
@@ -97,6 +98,40 @@ ipcMain.handle('select-output-dir', async () => {
   return result.filePaths[0];
 });
 
+// 2.5. Get Stream URL (Twitch/YouTube)
+ipcMain.handle('get-stream-url', async (event, url) => {
+  try {
+    const result = await ytDlp(url, {
+      dumpSingleJson: true,
+      noWarnings: true,
+    });
+
+    let formats = [];
+    if (result.formats) {
+      formats = result.formats
+        // Filter out audio-only if possible, though Twitch usually has combined streams
+        .filter(f => f.vcodec !== 'none' && f.url)
+        .map(f => ({
+          format_id: f.format_id,
+          format_note: f.format_note || f.format_id,
+          height: f.height || 0,
+          fps: f.fps || 0,
+          url: f.url
+        }))
+        // Sort descending by height and fps
+        .sort((a, b) => {
+          if (b.height !== a.height) return b.height - a.height;
+          return b.fps - a.fps;
+        });
+    }
+
+    return { success: true, url: result.url, formats };
+  } catch (err) {
+    console.error('yt-dlp error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
 // 3. Export clips
 ipcMain.handle('export-clips', async (event, { videoPath, outputDir, clips, quality }) => {
   return new Promise(async (resolve, reject) => {
@@ -111,8 +146,14 @@ ipcMain.handle('export-clips', async (event, { videoPath, outputDir, clips, qual
           fs.mkdirSync(colorDir, { recursive: true });
         }
 
-        const ext = path.extname(videoPath);
-        const baseName = path.basename(videoPath, ext);
+        let ext = path.extname(videoPath);
+        let baseName = path.basename(videoPath, ext);
+
+        if (videoPath.startsWith('http') || ext.includes('.m3u8')) {
+          ext = '.mp4';
+          baseName = 'Twitch_VOD';
+        }
+
         const outputPath = path.join(colorDir, `${baseName}_clip_${i + 1}${ext}`);
 
         // Notify frontend of progress

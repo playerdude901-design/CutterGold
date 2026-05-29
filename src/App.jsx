@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Video, FolderOpen, Download, Play, Pause, Trash2, Plus } from 'lucide-react';
+import { Video, FolderOpen, Download, Play, Pause, Trash2, Plus, Link as LinkIcon } from 'lucide-react';
+import Hls from 'hls.js';
 import './App.css';
 
 const COLORS = [
@@ -22,10 +23,17 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const [exportQuality, setExportQuality] = useState('source');
   const [exportProgress, setExportProgress] = useState(null);
+  const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [showTwitchInput, setShowTwitchInput] = useState(false);
+  const [twitchUrl, setTwitchUrl] = useState('');
+  const [streamFormats, setStreamFormats] = useState([]);
+  const [showFormatSelection, setShowFormatSelection] = useState(false);
+  const [showUpdateNotice, setShowUpdateNotice] = useState(true);
   
   // Interactive States
   const [activeClipId, setActiveClipId] = useState(null);
   const [dragInfo, setDragInfo] = useState(null);
+  const [editingTime, setEditingTime] = useState({ id: null, type: null, value: '' });
 
   // Zoom & Pan States
   const [zoomLevel, setZoomLevel] = useState(20); // pixels per second
@@ -77,6 +85,72 @@ function App() {
     }
   };
 
+  const applyStreamUrl = (url) => {
+    setVideoFile(url);
+    setVideoSrc(url);
+    setClips([]);
+    setActiveClipId(null);
+  };
+
+  const submitTwitchVOD = async (url) => {
+    setShowTwitchInput(false);
+    setTwitchUrl('');
+    if (!url) return;
+    if (!window.api || !window.api.getStreamUrl) {
+      alert("La API para streams no está disponible.");
+      return;
+    }
+
+    setIsLoadingStream(true);
+    try {
+      const res = await window.api.getStreamUrl(url);
+      if (res.success) {
+        if (res.formats && res.formats.length > 0) {
+          // Eliminar posibles duplicados
+          const uniqueFormats = res.formats.reduce((acc, current) => {
+            const exists = acc.find(item => item.format_id === current.format_id);
+            return exists ? acc : acc.concat([current]);
+          }, []);
+          setStreamFormats(uniqueFormats);
+          setShowFormatSelection(true);
+        } else {
+          // Fallback a la calidad por defecto
+          applyStreamUrl(res.url);
+        }
+      } else {
+        alert("Error al obtener stream: " + res.error);
+      }
+    } catch (err) {
+      alert("Error de conexión: " + err.message);
+    } finally {
+      setIsLoadingStream(false);
+    }
+  };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc) return;
+    
+    let hls;
+    if (videoSrc.includes('.m3u8')) {
+      if (Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(videoSrc);
+        hls.attachMedia(video);
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = videoSrc;
+      }
+    } else {
+      video.src = videoSrc;
+    }
+
+    return () => {
+      if (hls) {
+        hls.destroy();
+      }
+    };
+  }, [videoSrc]);
+
   const addClip = () => {
     if (!duration) return;
     const start = currentTime;
@@ -101,6 +175,42 @@ function App() {
   const updateActiveClipColor = (colorObj) => {
     if (!activeClipId) return;
     setClips(clips.map(c => c.id === activeClipId ? { ...c, color: colorObj.name, colorValue: colorObj.value } : c));
+  };
+
+  const parseTime = (timeStr) => {
+    const parts = timeStr.split(':');
+    let secs = 0;
+    if (parts.length === 3) {
+      secs += parseInt(parts[0] || 0) * 3600;
+      secs += parseInt(parts[1] || 0) * 60;
+      secs += parseFloat(parts[2] || 0);
+    } else if (parts.length === 2) {
+      secs += parseInt(parts[0] || 0) * 60;
+      secs += parseFloat(parts[1] || 0);
+    } else if (parts.length === 1) {
+      secs += parseFloat(parts[0] || 0);
+    }
+    return isNaN(secs) ? 0 : secs;
+  };
+
+  const handleTimeEdit = (clipId, type, valueStr) => {
+    const newTime = parseTime(valueStr);
+    if (newTime >= 0 && newTime <= duration) {
+      setClips(prevClips => prevClips.map(c => {
+        if (c.id === clipId) {
+          if (type === 'start') {
+            const newStart = Math.min(newTime, c.endTime - 0.5);
+            if (videoRef.current) videoRef.current.currentTime = newStart;
+            return { ...c, startTime: newStart };
+          } else {
+            const newEnd = Math.max(newTime, c.startTime + 0.5);
+            if (videoRef.current) videoRef.current.currentTime = newEnd;
+            return { ...c, endTime: newEnd };
+          }
+        }
+        return c;
+      }));
+    }
   };
 
   const handleExport = async () => {
@@ -203,9 +313,15 @@ function App() {
       const zoomMultiplier = 1 + zoomDelta;
       let newZoom = zoomLevel * zoomMultiplier;
       
-      // Min/Max Zoom clamping (max 500 pixels per second to prevent infinite zoom/canvas crash)
+      // Min/Max Zoom clamping
+      // Browsers usually crash or fail to render canvas widths > 32,767 pixels.
+      // We limit the total track width to 30,000 pixels.
+      const MAX_CANVAS_WIDTH = 30000;
+      const absoluteMaxZoom = MAX_CANVAS_WIDTH / duration;
+      
       const minZoom = timelineScrollRef.current.clientWidth / duration;
-      newZoom = Math.max(minZoom, Math.min(newZoom, 500));
+      // We clamp newZoom between minZoom and the safe max zoom (with a hard cap of 500)
+      newZoom = Math.max(minZoom, Math.min(newZoom, Math.min(500, absoluteMaxZoom)));
 
       // Keep cursor position stable relative to time
       const scrollContainer = timelineScrollRef.current;
@@ -358,51 +474,51 @@ function App() {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 
-    // Determine the step based on zoom level to prevent clutter
-    let step = 1; // seconds
-    if (zoomLevel > 1000) step = 0.05;
-    else if (zoomLevel > 200) step = 0.1;
-    else if (zoomLevel > 50) step = 1;
-    else if (zoomLevel > 20) step = 5;
-    else if (zoomLevel > 5) step = 10;
-    else step = 60;
+    // We want adaptive steps based on zoomLevel (pixels per second)
+    let majorStep = 60; // seconds per major tick (with text)
+    let minorStep = 10; // seconds per minor tick
 
-    for (let t = 0; t <= duration; t += step) {
+    if (zoomLevel > 1000) { majorStep = 0.1; minorStep = 0.02; }
+    else if (zoomLevel > 500) { majorStep = 0.5; minorStep = 0.1; }
+    else if (zoomLevel > 100) { majorStep = 1; minorStep = 0.2; }
+    else if (zoomLevel > 50) { majorStep = 5; minorStep = 1; }
+    else if (zoomLevel > 20) { majorStep = 10; minorStep = 2; }
+    else if (zoomLevel > 5) { majorStep = 30; minorStep = 5; }
+    else if (zoomLevel > 1) { majorStep = 60; minorStep = 10; }
+    else if (zoomLevel > 0.1) { majorStep = 300; minorStep = 60; }
+    else { majorStep = 1800; minorStep = 300; }
+
+    const showMs = majorStep < 1;
+
+    for (let t = 0; t <= duration; t += minorStep) {
       const x = t * zoomLevel;
       
-      // Determine line height
-      let lineH = 5;
-      let isMajor = false;
+      // Floating point math safe modulo
+      const mod = t % majorStep;
+      const isMajor = mod < minorStep / 2 || (majorStep - mod) < minorStep / 2;
 
-      // Formatting
-      if (Math.abs(t % 1) < 0.001) { // Whole second
-        if (t % 10 === 0 && step >= 1) { // Major 10 second intervals
-          lineH = 15;
-          isMajor = true;
-        } else if (t % 1 === 0 && step < 10) { // Whole seconds
-          lineH = 10;
-          if (step < 1) isMajor = true;
-        }
-      } else {
-        // decimals
-        lineH = 5;
-      }
+      let lineH = isMajor ? 15 : 5;
 
       ctx.fillRect(x - 0.5, height - lineH, 1, lineH);
 
-      // Draw text
+      // Draw text for major ticks or first/last
       if (isMajor || t === 0 || t === Math.floor(duration)) {
-        ctx.fillText(formatTime(t), x, 2);
+        ctx.fillText(formatTime(t, showMs), x, 2);
       }
     }
   }, [duration, zoomLevel]);
 
-  const formatTime = (timeInSeconds) => {
+  const formatTime = (timeInSeconds, showMs = true) => {
     const hrs = Math.floor(timeInSeconds / 3600);
     const min = Math.floor((timeInSeconds % 3600) / 60);
     const sec = Math.floor(timeInSeconds % 60);
-    const ms = Math.floor((timeInSeconds % 1) * 1000); // 3 digits
-    return `${hrs.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}:${ms.toString().padStart(3, '0')}`;
+    const ms = Math.floor((timeInSeconds % 1) * 1000); 
+    
+    let str = `${hrs.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+    if (showMs) {
+      str += `:${ms.toString().padStart(3, '0')}`;
+    }
+    return str;
   };
 
   const activeClip = clips.find(c => c.id === activeClipId);
@@ -418,7 +534,10 @@ function App() {
       <header className="header glass-panel">
         <h1 className="app-title"><span className="text-grey">Cutter</span><span className="text-gold-shine">Gold</span></h1>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn" onClick={handleSelectVideo}>
+          <button className="btn" onClick={() => setShowTwitchInput(true)} disabled={isLoadingStream}>
+            <LinkIcon size={18} /> {isLoadingStream ? 'Cargando...' : 'Añadir Twitch VOD'}
+          </button>
+          <button className="btn" onClick={handleSelectVideo} disabled={isLoadingStream}>
             <Video size={18} /> Select Video
           </button>
           <button className="btn btn-secondary" onClick={handleSelectOutputDir}>
@@ -433,7 +552,6 @@ function App() {
             {videoSrc ? (
               <video
                 ref={videoRef}
-                src={videoSrc}
                 className="video-element"
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
@@ -531,9 +649,47 @@ function App() {
                   <h3 style={{ color: 'var(--accent-primary)', margin: 0 }}>Editar Selección</h3>
                   <button onClick={() => setActiveClipId(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}>&times;</button>
                 </div>
-                <div className="clip-times" style={{ margin: '15px 0' }}>
-                  <div><strong>In:</strong> {formatTime(activeClip.startTime)}</div>
-                  <div><strong>Out:</strong> {formatTime(activeClip.endTime)}</div>
+                <div className="clip-times" style={{ margin: '15px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <strong style={{ width: '40px' }}>In:</strong> 
+                    <input 
+                      type="text" 
+                      value={editingTime.id === activeClip.id && editingTime.type === 'start' ? editingTime.value : formatTime(activeClip.startTime)}
+                      onChange={(e) => setEditingTime({ id: activeClip.id, type: 'start', value: e.target.value })}
+                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'start', value: formatTime(activeClip.startTime) })}
+                      onBlur={(e) => {
+                        handleTimeEdit(activeClip.id, 'start', e.target.value);
+                        setEditingTime({ id: null, type: null, value: '' });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleTimeEdit(activeClip.id, 'start', e.target.value);
+                          setEditingTime({ id: null, type: null, value: '' });
+                        }
+                      }}
+                      style={{ flex: 1, padding: '5px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', fontFamily: 'monospace' }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <strong style={{ width: '40px' }}>Out:</strong> 
+                    <input 
+                      type="text" 
+                      value={editingTime.id === activeClip.id && editingTime.type === 'end' ? editingTime.value : formatTime(activeClip.endTime)}
+                      onChange={(e) => setEditingTime({ id: activeClip.id, type: 'end', value: e.target.value })}
+                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'end', value: formatTime(activeClip.endTime) })}
+                      onBlur={(e) => {
+                        handleTimeEdit(activeClip.id, 'end', e.target.value);
+                        setEditingTime({ id: null, type: null, value: '' });
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleTimeEdit(activeClip.id, 'end', e.target.value);
+                          setEditingTime({ id: null, type: null, value: '' });
+                        }
+                      }}
+                      style={{ flex: 1, padding: '5px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', fontFamily: 'monospace' }}
+                    />
+                  </div>
                 </div>
                 
                 <div style={{ marginBottom: '20px' }}>
@@ -696,6 +852,75 @@ function App() {
                 </button>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Twitch Input Modal */}
+      {showTwitchInput && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '20px', maxWidth: '400px' }}>
+            <h2 style={{ color: 'var(--accent-primary)', marginBottom: '15px', fontSize: '1.5rem' }}>Añadir Twitch VOD</h2>
+            <input 
+              type="text" 
+              value={twitchUrl} 
+              onChange={(e) => setTwitchUrl(e.target.value)} 
+              placeholder="https://twitch.tv/videos/..." 
+              style={{ width: '100%', padding: '12px', marginBottom: '20px', backgroundColor: 'rgba(0,0,0,0.5)', color: 'white', border: '1px solid var(--glass-border)', borderRadius: '4px', fontSize: '1rem' }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setShowTwitchInput(false)}>Cancelar</button>
+              <button className="btn" onClick={() => submitTwitchVOD(twitchUrl)}>Aceptar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Format Selection Modal */}
+      {showFormatSelection && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '20px', maxWidth: '400px' }}>
+            <h2 style={{ color: 'var(--accent-primary)', marginBottom: '15px', fontSize: '1.5rem' }}>Selecciona la Calidad</h2>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px', maxHeight: '350px', overflowY: 'auto', paddingRight: '5px' }}>
+              {streamFormats.map(f => (
+                <button 
+                  key={f.format_id}
+                  className="btn btn-secondary" 
+                  style={{ width: '100%', display: 'flex', justifyContent: 'space-between', padding: '10px 15px', backgroundColor: 'rgba(255,255,255,0.05)', border: '1px solid var(--glass-border)' }}
+                  onClick={() => {
+                    applyStreamUrl(f.url);
+                    setShowFormatSelection(false);
+                  }}
+                >
+                  <span style={{ fontWeight: 'bold' }}>{f.format_note} {f.fps ? `(${f.fps}fps)` : ''}</span>
+                  <span style={{ color: 'var(--text-secondary)' }}>{f.height ? `${f.height}p` : ''}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setShowFormatSelection(false)}>Cancelar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update 0.0.4 Notice Modal */}
+      {showUpdateNotice && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ padding: '30px', maxWidth: '450px', textAlign: 'center' }}>
+            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.4!</h2>
+            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>Features & Fixes</h3>
+            <ul style={{ textAlign: 'left', color: 'var(--text-secondary)', marginBottom: '25px', lineHeight: '1.6', fontSize: '0.95rem', paddingLeft: '20px' }}>
+              <li><strong>NUEVO:</strong> Integración de Twitch VODs. ¡Solo pega el link!</li>
+              <li><strong>NUEVO:</strong> Selector de calidades al importar streams.</li>
+              <li><strong>NUEVO:</strong> Edición manual de tiempos en el panel lateral.</li>
+              <li><strong>FIX:</strong> La línea de tiempo ahora es 100% adaptativa sin romperse.</li>
+              <li><strong>FIX:</strong> Los cortes en los streams se exportan en `.mp4` correctamente.</li>
+            </ul>
+            <button className="btn btn-gold-glow" style={{ padding: '10px 30px', fontSize: '1.1rem' }} onClick={() => setShowUpdateNotice(false)}>
+              Enterado
+            </button>
           </div>
         </div>
       )}

@@ -24,7 +24,8 @@
       "electron/**/*"
     ],
     "asarUnpack": [
-      "node_modules/ffmpeg-static/**/*"
+      "node_modules/ffmpeg-static/**/*",
+      "node_modules/yt-dlp-exec/**/*"
     ],
     "publish": {
       "provider": "github"

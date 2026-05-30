@@ -1,7 +1,7 @@
 {
   "name": "cuttergold",
   "private": true,
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Una herramienta rápida y avanzada para automatizar y recortar clips de Twitch y videos locales.",
   "author": "Playerdude901",
   "type": "module",

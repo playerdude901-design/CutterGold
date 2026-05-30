@@ -101,7 +101,15 @@ ipcMain.handle('select-output-dir', async () => {
 // 2.5. Get Stream URL (Twitch/YouTube)
 ipcMain.handle('get-stream-url', async (event, url) => {
   try {
-    const result = await ytDlp(url, {
+    const isWin = process.platform === 'win32';
+    const binaryName = isWin ? 'yt-dlp.exe' : 'yt-dlp';
+    let binaryPath = path.join(__dirname, '..', 'node_modules', 'yt-dlp-exec', 'bin', binaryName);
+    if (binaryPath.includes('app.asar')) {
+      binaryPath = binaryPath.replace('app.asar', 'app.asar.unpacked');
+    }
+
+    const customYtDlp = ytDlp.create(binaryPath);
+    const result = await customYtDlp(url, {
       dumpSingleJson: true,
       noWarnings: true,
     });

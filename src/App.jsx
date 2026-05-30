@@ -905,17 +905,18 @@ function App() {
         </div>
       )}
 
-      {/* Update 0.0.4 Notice Modal */}
+      {/* Update 0.0.5 Notice Modal */}
       {showUpdateNotice && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ padding: '30px', maxWidth: '450px', textAlign: 'center' }}>
-            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.4!</h2>
+            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.5!</h2>
             <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>Features & Fixes</h3>
             <ul style={{ textAlign: 'left', color: 'var(--text-secondary)', marginBottom: '25px', lineHeight: '1.6', fontSize: '0.95rem', paddingLeft: '20px' }}>
+              <li><strong>HOTFIX:</strong> Corregido error al importar Twitch VODs en la versión instalable de producción.</li>
               <li><strong>NUEVO:</strong> Integración de Twitch VODs. ¡Solo pega el link!</li>
               <li><strong>NUEVO:</strong> Selector de calidades al importar streams.</li>
               <li><strong>NUEVO:</strong> Edición manual de tiempos en el panel lateral.</li>
-              <li><strong>FIX:</strong> La línea de tiempo ahora es 100% adaptativa sin romperse.</li>
+              <li><strong>FIX:</strong> La línea de tiempo ahora es adaptativa con límite de zoom.</li>
               <li><strong>FIX:</strong> Los cortes en los streams se exportan en `.mp4` correctamente.</li>
             </ul>
             <button className="btn btn-gold-glow" style={{ padding: '10px 30px', fontSize: '1.1rem' }} onClick={() => setShowUpdateNotice(false)}>

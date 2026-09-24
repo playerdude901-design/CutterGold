@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 dist-electron
+release
+*.tsbuildinfo
 *.local
 
 # Editor directories and files

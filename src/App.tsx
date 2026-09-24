@@ -13,34 +13,57 @@ const COLORS = [
 ];
 
 function App() {
-  const [videoFile, setVideoFile] = useState(null);
-  const [videoSrc, setVideoSrc] = useState(null);
-  const [outputDir, setOutputDir] = useState(null);
-  const [clips, setClips] = useState([]);
-  const [duration, setDuration] = useState(0);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [exportQuality, setExportQuality] = useState('source');
-  const [exportProgress, setExportProgress] = useState(null);
-  const [isLoadingStream, setIsLoadingStream] = useState(false);
-  const [showTwitchInput, setShowTwitchInput] = useState(false);
-  const [twitchUrl, setTwitchUrl] = useState('');
-  const [streamFormats, setStreamFormats] = useState([]);
-  const [showFormatSelection, setShowFormatSelection] = useState(false);
-  const [showUpdateNotice, setShowUpdateNotice] = useState(true);
+  const [videoFile, setVideoFile] = useState<string | null>(null);
+  const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [outputDir, setOutputDir] = useState<string | null>(null);
+  const [clips, setClips] = useState<any[]>([]);
+  const [zoomLevel, setZoomLevel] = useState<number>(100);
+  const [duration, setDuration] = useState<number>(0);
+  const [currentTime, setCurrentTime] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [exporting, setExporting] = useState<boolean>(false);
+  const [exportQuality, setExportQuality] = useState<'source' | 'hd' | 'fhd'>('source');
+  const [exportProgress, setExportProgress] = useState<any>(null);
+  const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
+  const [showTwitchInput, setShowTwitchInput] = useState<boolean>(false);
+  const [twitchUrl, setTwitchUrl] = useState<string>('');
+  const [streamFormats, setStreamFormats] = useState<any[]>([]);
+  const [showFormatSelection, setShowFormatSelection] = useState<boolean>(false);
+  const [showUpdateNotice, setShowUpdateNotice] = useState<boolean>(true);
+  const [exportId, setExportId] = useState<string | null>(null);
   
   // Interactive States
-  const [activeClipId, setActiveClipId] = useState(null);
-  const [dragInfo, setDragInfo] = useState(null);
-  const [editingTime, setEditingTime] = useState({ id: null, type: null, value: '' });
-
-  // Zoom & Pan States
-  const [zoomLevel, setZoomLevel] = useState(20); // pixels per second
-  const timelineScrollRef = useRef(null);
-  const timelineTrackRef = useRef(null);
-  const canvasRef = useRef(null);
-  const videoRef = useRef(null);
+  const [activeClipId, setActiveClipId] = useState<string | null>(null);
+  const [dragInfo, setDragInfo] = useState<any>(null);
+  const [editingTime, setEditingTime] = useState<{ id: string | null; type: string | null; value: string }>({ id: null, type: null, value: '' });
+  
+  // Refs for stable drag handlers
+  const dragInfoRef = useRef(dragInfo);
+  dragInfoRef.current = dragInfo;
+  
+  const clipsRef = useRef(clips);
+  clipsRef.current = clips;
+  
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
+  
+  const zoomLevelRef = useRef(zoomLevel);
+  zoomLevelRef.current = zoomLevel;
+  
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const currentTimeRef = useRef<number>(currentTime);
+  currentTimeRef.current = currentTime;
+  
+  const activeClipIdRef = useRef<string | null>(activeClipId);
+  activeClipIdRef.current = activeClipId;
+  
+  const isPlayingRef = useRef<boolean>(isPlaying);
+  isPlayingRef.current = isPlaying;
+  
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const timelineTrackRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
 
   useEffect(() => {
     if (window.api && window.api.onExportProgress) {
@@ -63,11 +86,13 @@ function App() {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'video/*';
-      input.onchange = (e) => {
-        const file = e.target.files[0];
+      input.onchange = (e: Event) => {
+        const target = e.target as HTMLInputElement;
+        const file = target.files ? target.files[0] : null;
         if (file) {
-          setVideoFile(file.path || file.name);
-          setVideoSrc(URL.createObjectURL(file));
+          const objectUrl = URL.createObjectURL(file);
+          setVideoFile(objectUrl);
+          setVideoSrc(objectUrl);
           setClips([]);
           setActiveClipId(null);
         }
@@ -77,22 +102,29 @@ function App() {
   };
 
   const handleSelectOutputDir = async () => {
-    if (window.api) {
-      const dirPath = await window.api.selectOutputDir();
-      if (dirPath) {
-        setOutputDir(dirPath);
+    if (window.api && window.api.selectOutputDir) {
+      try {
+        const dirPath = await window.api.selectOutputDir();
+        if (dirPath) {
+          setOutputDir(dirPath);
+        }
+      } catch (err) {
+        console.error("Error al seleccionar carpeta:", err);
       }
+    } else {
+      console.error("window.api.selectOutputDir no disponible. Verifica que el preload script se cargó correctamente.");
+      alert("Error: No se puede abrir el selector de carpetas. Reinicia la aplicación.");
     }
   };
 
-  const applyStreamUrl = (url) => {
+  const applyStreamUrl = (url: string) => {
     setVideoFile(url);
     setVideoSrc(url);
     setClips([]);
     setActiveClipId(null);
   };
 
-  const submitTwitchVOD = async (url) => {
+  const submitTwitchVOD = async (url: string) => {
     setShowTwitchInput(false);
     setTwitchUrl('');
     if (!url) return;
@@ -107,21 +139,21 @@ function App() {
       if (res.success) {
         if (res.formats && res.formats.length > 0) {
           // Eliminar posibles duplicados
-          const uniqueFormats = res.formats.reduce((acc, current) => {
+          const uniqueFormats = res.formats.reduce((acc: any[], current: any) => {
             const exists = acc.find(item => item.format_id === current.format_id);
             return exists ? acc : acc.concat([current]);
           }, []);
           setStreamFormats(uniqueFormats);
           setShowFormatSelection(true);
-        } else {
+        } else if (res.url) {
           // Fallback a la calidad por defecto
           applyStreamUrl(res.url);
         }
       } else {
         alert("Error al obtener stream: " + res.error);
       }
-    } catch (err) {
-      alert("Error de conexión: " + err.message);
+    } catch (err: any) {
+      alert("Error de conexión: " + (err?.message || err));
     } finally {
       setIsLoadingStream(false);
     }
@@ -130,11 +162,17 @@ function App() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !videoSrc) return;
-    
-    let hls;
+
+    // Cleanup previous HLS instance
+    if (hlsRef.current) {
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
     if (videoSrc.includes('.m3u8')) {
       if (Hls.isSupported()) {
-        hls = new Hls();
+        const hls = new Hls();
+        hlsRef.current = hls;
         hls.loadSource(videoSrc);
         hls.attachMedia(video);
       } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -145,11 +183,23 @@ function App() {
     }
 
     return () => {
-      if (hls) {
-        hls.destroy();
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      // Revoke object URLs to prevent memory leaks
+      if (videoSrc && videoSrc.startsWith('blob:')) {
+        URL.revokeObjectURL(videoSrc);
       }
     };
   }, [videoSrc]);
+
+  const checkOverlap = (clipsArray: any[], newClip: any, excludeId: string | null = null) => {
+    return clipsArray.some(clip => {
+      if (excludeId && clip.id === excludeId) return false;
+      return !(newClip.endTime <= clip.startTime || newClip.startTime >= clip.endTime);
+    });
+  };
 
   const addClip = () => {
     if (!duration) return;
@@ -162,91 +212,125 @@ function App() {
       color: COLORS[0].name,
       colorValue: COLORS[0].value
     };
+    
+    if (checkOverlap(clips, newClip)) {
+      alert('Este clip se solapa con otro clip existente. Ajusta los tiempos.');
+      return;
+    }
+    
     setClips([...clips, newClip]);
     setActiveClipId(newClip.id);
   };
 
-  const removeClip = (id, e) => {
-    if(e) e.stopPropagation();
+  const removeClip = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     setClips(clips.filter(c => c.id !== id));
     if (activeClipId === id) setActiveClipId(null);
   };
 
-  const updateActiveClipColor = (colorObj) => {
+  const updateActiveClipColor = (colorObj: { name: string; value: string }) => {
     if (!activeClipId) return;
     setClips(clips.map(c => c.id === activeClipId ? { ...c, color: colorObj.name, colorValue: colorObj.value } : c));
   };
 
-  const parseTime = (timeStr) => {
+  const parseTime = (timeStr: string): number => {
+    if (!timeStr) return 0;
     const parts = timeStr.split(':');
     let secs = 0;
     if (parts.length === 3) {
-      secs += parseInt(parts[0] || 0) * 3600;
-      secs += parseInt(parts[1] || 0) * 60;
-      secs += parseFloat(parts[2] || 0);
+      secs += parseInt(parts[0] || '0') * 3600;
+      secs += parseInt(parts[1] || '0') * 60;
+      secs += parseFloat(parts[2] || '0');
     } else if (parts.length === 2) {
-      secs += parseInt(parts[0] || 0) * 60;
-      secs += parseFloat(parts[1] || 0);
+      secs += parseInt(parts[0] || '0') * 60;
+      secs += parseFloat(parts[1] || '0');
     } else if (parts.length === 1) {
-      secs += parseFloat(parts[0] || 0);
+      secs += parseFloat(parts[0] || '0');
     }
     return isNaN(secs) ? 0 : secs;
   };
 
-  const handleTimeEdit = (clipId, type, valueStr) => {
+  const handleTimeEdit = (clipId: string, type: 'start' | 'end', valueStr: string) => {
     const newTime = parseTime(valueStr);
-    if (newTime >= 0 && newTime <= duration) {
-      setClips(prevClips => prevClips.map(c => {
-        if (c.id === clipId) {
-          if (type === 'start') {
-            const newStart = Math.min(newTime, c.endTime - 0.5);
-            if (videoRef.current) videoRef.current.currentTime = newStart;
-            return { ...c, startTime: newStart };
-          } else {
-            const newEnd = Math.max(newTime, c.startTime + 0.5);
-            if (videoRef.current) videoRef.current.currentTime = newEnd;
-            return { ...c, endTime: newEnd };
+    const dur = durationRef.current;
+    if (newTime >= 0 && newTime <= dur) {
+      setClips(prevClips => {
+        const clip = prevClips.find(c => c.id === clipId);
+        if (!clip) return prevClips;
+        
+        if (type === 'start') {
+          const newStart = Math.min(newTime, clip.endTime - 0.5);
+          const newClip = { ...clip, startTime: newStart };
+          if (checkOverlap(prevClips, newClip, clipId)) {
+            return prevClips; // Reject if overlap
           }
+          if (videoRef.current) videoRef.current.currentTime = newStart;
+          return prevClips.map(c => c.id === clipId ? newClip : c);
+        } else {
+          const newEnd = Math.max(newTime, clip.startTime + 0.5);
+          const newClip = { ...clip, endTime: newEnd };
+          if (checkOverlap(prevClips, newClip, clipId)) {
+            return prevClips; // Reject if overlap
+          }
+          if (videoRef.current) videoRef.current.currentTime = newEnd;
+          return prevClips.map(c => c.id === clipId ? newClip : c);
         }
-        return c;
-      }));
+      });
     }
   };
 
   const handleExport = async () => {
     if (!window.api || !videoFile || !outputDir || clips.length === 0) return;
+    const id = Date.now().toString();
+    setExportId(id);
     setExporting(true);
     setExportProgress({ current: 0, total: clips.length, status: 'processing' });
     try {
-      await window.api.exportClips({
+      const result = await window.api.exportClips({
         videoPath: videoFile,
         outputDir: outputDir,
         clips: clips,
         quality: exportQuality
       });
-      // Instead of an alert, we update the modal state to 'done'
-      setExportProgress({ status: 'done' });
-    } catch (error) {
+      
+      if (result.cancelled) {
+        setExportProgress({ status: 'cancelled' });
+      } else if (result.success) {
+        setExportProgress({ status: 'done', files: result.files });
+      } else {
+        setExportProgress({ status: 'error', error: result.error });
+      }
+    } catch (error: any) {
       console.error(error);
-      setExportProgress({ status: 'error' });
+      setExportProgress({ status: 'error', error: error?.message || 'Error desconocido' });
+    }
+  };
+  
+  const handleCancelExport = async () => {
+    if (window.api && exportId) {
+      await window.api.cancelExport(exportId);
     }
   };
 
   const togglePlay = () => {
     if (videoRef.current) {
-      if (isPlaying) videoRef.current.pause();
-      else videoRef.current.play();
-      setIsPlaying(!isPlaying);
+      if (isPlayingRef.current) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(prev => !prev);
     }
   };
 
   const handleTimeUpdate = () => {
-    if (videoRef.current && !dragInfo) {
-      setCurrentTime(videoRef.current.currentTime);
+    if (videoRef.current && !dragInfoRef.current) {
+      const newTime = videoRef.current.currentTime;
+      setCurrentTime(newTime);
       
       // Auto-scroll timeline to keep playhead in view when playing
-      if (isPlaying && timelineScrollRef.current) {
-        const playheadX = videoRef.current.currentTime * zoomLevel;
+      if (isPlayingRef.current && timelineScrollRef.current) {
+        const playheadX = newTime * zoomLevelRef.current;
         const scrollContainer = timelineScrollRef.current;
         const scrollLeft = scrollContainer.scrollLeft;
         const clientWidth = scrollContainer.clientWidth;
@@ -278,49 +362,49 @@ function App() {
     }
   };
 
-  const handleTimelineClick = (e) => {
-    if (dragInfo) return; 
-    if (e.target.closest('.clip-marker') || e.target.closest('.playhead-handle')) return;
+  const handleTimelineClick = (e: React.MouseEvent) => {
+    if (dragInfoRef.current) return; 
+    const target = e.target as HTMLElement;
+    if (target.closest('.clip-marker') || target.closest('.playhead-handle')) return;
     
-    if (!duration || !videoRef.current || !timelineTrackRef.current) return;
+    const dur = durationRef.current;
+    if (!dur || !videoRef.current || !timelineTrackRef.current) return;
     const rect = timelineTrackRef.current.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / zoomLevel;
-    const newTime = Math.max(0, Math.min(pos, duration));
+    const pos = (e.clientX - rect.left) / zoomLevelRef.current;
+    const newTime = Math.max(0, Math.min(pos, dur));
     videoRef.current.currentTime = newTime;
     setCurrentTime(newTime);
     setActiveClipId(null);
   };
 
-  const jumpToClip = (clip) => {
+  const jumpToClip = (clip: any) => {
     setActiveClipId(clip.id);
     if (videoRef.current) {
       videoRef.current.currentTime = clip.startTime;
       setCurrentTime(clip.startTime);
     }
     if (timelineScrollRef.current) {
-      timelineScrollRef.current.scrollLeft = Math.max(0, (clip.startTime * zoomLevel) - (timelineScrollRef.current.clientWidth / 2));
+      timelineScrollRef.current.scrollLeft = Math.max(0, (clip.startTime * zoomLevelRef.current) - (timelineScrollRef.current.clientWidth / 2));
     }
   };
 
   // --- ZOOM & PAN (WHEEL LOGIC) ---
-  const handleWheel = (e) => {
-    if (!duration || !timelineScrollRef.current) return;
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const dur = durationRef.current;
+    if (!dur || !timelineScrollRef.current) return;
 
     if (e.altKey) {
       // Zoom
       e.preventDefault(); // Prevent browser zoom
       const zoomDelta = e.deltaY > 0 ? -0.1 : 0.1;
       const zoomMultiplier = 1 + zoomDelta;
-      let newZoom = zoomLevel * zoomMultiplier;
+      let newZoom = zoomLevelRef.current * zoomMultiplier;
       
       // Min/Max Zoom clamping
-      // Browsers usually crash or fail to render canvas widths > 32,767 pixels.
-      // We limit the total track width to 30,000 pixels.
       const MAX_CANVAS_WIDTH = 30000;
-      const absoluteMaxZoom = MAX_CANVAS_WIDTH / duration;
+      const absoluteMaxZoom = MAX_CANVAS_WIDTH / dur;
       
-      const minZoom = timelineScrollRef.current.clientWidth / duration;
-      // We clamp newZoom between minZoom and the safe max zoom (with a hard cap of 500)
+      const minZoom = timelineScrollRef.current.clientWidth / dur;
       newZoom = Math.max(minZoom, Math.min(newZoom, Math.min(500, absoluteMaxZoom)));
 
       // Keep cursor position stable relative to time
@@ -328,12 +412,11 @@ function App() {
       const containerRect = scrollContainer.getBoundingClientRect();
       const cursorX = e.clientX - containerRect.left;
       
-      const timeAtCursor = (scrollContainer.scrollLeft + cursorX) / zoomLevel;
+      const timeAtCursor = (scrollContainer.scrollLeft + cursorX) / zoomLevelRef.current;
       const newScrollLeft = (timeAtCursor * newZoom) - cursorX;
 
       setZoomLevel(newZoom);
       
-      // Allow React to re-render, then set scrollLeft
       requestAnimationFrame(() => {
         if (timelineScrollRef.current) {
            timelineScrollRef.current.scrollLeft = newScrollLeft;
@@ -348,10 +431,10 @@ function App() {
   };
 
   // --- DRAG LOGIC ---
-  const handleClipMouseDown = (e, id, type) => {
+  const handleClipMouseDown = (e: React.MouseEvent, id: string, type: 'move' | 'start' | 'end') => {
     e.stopPropagation();
     setActiveClipId(id);
-    const clip = clips.find(c => c.id === id);
+    const clip = clipsRef.current.find(c => c.id === id);
     if (!clip) return;
     
     setDragInfo({
@@ -363,33 +446,71 @@ function App() {
     });
   };
 
-  const handlePlayheadMouseDown = (e) => {
+  const handlePlayheadMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation();
     setDragInfo({
       id: 'playhead',
       type: 'playhead',
       startX: e.clientX,
-      initialStart: currentTime
+      initialStart: currentTimeRef.current
     });
   };
 
-  const handleMouseMove = useCallback((e) => {
-    if (!dragInfo || !duration) return;
-    
-    const deltaX = e.clientX - dragInfo.startX;
-    const deltaSeconds = deltaX / zoomLevel;
+  // Smooth 60fps Playhead Sync during Video Playback
+  useEffect(() => {
+    let animFrameId: number;
+    const syncPlayhead = () => {
+      if (videoRef.current && isPlaying && !dragInfoRef.current) {
+        const newTime = videoRef.current.currentTime;
+        setCurrentTime(newTime);
+        
+        if (timelineScrollRef.current) {
+          const playheadX = newTime * zoomLevelRef.current;
+          const scrollContainer = timelineScrollRef.current;
+          const scrollLeft = scrollContainer.scrollLeft;
+          const clientWidth = scrollContainer.clientWidth;
+          
+          if (playheadX > scrollLeft + clientWidth * 0.8) {
+            scrollContainer.scrollLeft = playheadX - clientWidth * 0.2;
+          } else if (playheadX < scrollLeft) {
+            scrollContainer.scrollLeft = Math.max(0, playheadX - clientWidth * 0.2);
+          }
+        }
+        animFrameId = requestAnimationFrame(syncPlayhead);
+      }
+    };
+
+    if (isPlaying) {
+      animFrameId = requestAnimationFrame(syncPlayhead);
+    }
+    return () => {
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+    };
+  }, [isPlaying]);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    const dragInfo = dragInfoRef.current;
+    if (!dragInfo || !durationRef.current) return;
     
     if (dragInfo.type === 'playhead') {
-      const newTime = Math.max(0, Math.min(dragInfo.initialStart + deltaSeconds, duration));
-      if (videoRef.current) {
-        videoRef.current.currentTime = newTime;
+      if (timelineTrackRef.current) {
+        const rect = timelineTrackRef.current.getBoundingClientRect();
+        const pos = (e.clientX - rect.left) / zoomLevelRef.current;
+        const newTime = Math.max(0, Math.min(pos, durationRef.current));
+        if (videoRef.current) {
+          videoRef.current.currentTime = newTime;
+        }
+        setCurrentTime(newTime);
       }
-      setCurrentTime(newTime);
       return;
     }
 
-    setClips(prevClips => prevClips.map(clip => {
-      if (clip.id !== dragInfo.id) return clip;
+    const deltaX = e.clientX - dragInfo.startX;
+    const deltaSeconds = deltaX / zoomLevelRef.current;
+
+    setClips(prevClips => {
+      const clip = prevClips.find(c => c.id === dragInfo.id);
+      if (!clip) return prevClips;
       
       let newStart = clip.startTime;
       let newEnd = clip.endTime;
@@ -397,12 +518,18 @@ function App() {
       
       if (dragInfo.type === 'move') {
         const clipDuration = dragInfo.initialEnd - dragInfo.initialStart;
-        newStart = Math.max(0, Math.min(dragInfo.initialStart + deltaSeconds, duration - clipDuration));
+        newStart = Math.max(0, Math.min(dragInfo.initialStart + deltaSeconds, durationRef.current - clipDuration));
         newEnd = newStart + clipDuration;
       } else if (dragInfo.type === 'start') {
         newStart = Math.max(0, Math.min(dragInfo.initialStart + deltaSeconds, dragInfo.initialEnd - MIN_DURATION));
       } else if (dragInfo.type === 'end') {
-        newEnd = Math.max(dragInfo.initialStart + MIN_DURATION, Math.min(dragInfo.initialEnd + deltaSeconds, duration));
+        newEnd = Math.max(dragInfo.initialStart + MIN_DURATION, Math.min(dragInfo.initialEnd + deltaSeconds, durationRef.current));
+      }
+
+      // Check for overlaps
+      const newClip = { ...clip, startTime: newStart, endTime: newEnd };
+      if (checkOverlap(prevClips, newClip, dragInfo.id)) {
+        return prevClips; // Reject the change if it causes overlap
       }
 
       if (videoRef.current) {
@@ -415,35 +542,32 @@ function App() {
         }
       }
 
-      return { ...clip, startTime: newStart, endTime: newEnd };
-    }));
-  }, [dragInfo, duration, zoomLevel]);
+      return prevClips.map(c => c.id === dragInfo.id ? newClip : c);
+    });
+  }, []);
 
   const handleMouseUp = useCallback(() => {
-    if (dragInfo) {
+    if (dragInfoRef.current) {
       setDragInfo(null);
     }
-  }, [dragInfo]);
+  }, []);
 
   useEffect(() => {
     if (dragInfo) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
-    } else {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
     }
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
   }, [dragInfo, handleMouseMove, handleMouseUp]);
 
   // Block native wheel on the container to intercept zoom/pan safely
   useEffect(() => {
     const el = timelineScrollRef.current;
     if (!el) return;
-    const preventDefaultScroll = (e) => {
+    const preventDefaultScroll = (e: WheelEvent) => {
       if (e.altKey || e.ctrlKey) e.preventDefault();
     };
     el.addEventListener('wheel', preventDefaultScroll, { passive: false });
@@ -456,6 +580,7 @@ function App() {
     if (!canvas || !duration) return;
     
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const width = duration * zoomLevel;
     const height = 40; // canvas height
 
@@ -503,12 +628,25 @@ function App() {
 
       // Draw text for major ticks or first/last
       if (isMajor || t === 0 || t === Math.floor(duration)) {
-        ctx.fillText(formatTime(t, showMs), x, 2);
+        ctx.fillText(formatTimeCanvas(t, showMs), x, 2);
       }
     }
   }, [duration, zoomLevel]);
 
-  const formatTime = (timeInSeconds, showMs = true) => {
+  const formatTime = (timeInSeconds: number, showMs = false) => {
+    const hrs = Math.floor(timeInSeconds / 3600);
+    const min = Math.floor((timeInSeconds % 3600) / 60);
+    const sec = Math.floor(timeInSeconds % 60);
+    const ms = Math.floor((timeInSeconds % 1) * 1000); 
+    
+    let str = `${hrs.toString().padStart(2, '0')}:${min.toString().padStart(2, '0')}:${sec.toString().padStart(2, '0')}`;
+    if (showMs) {
+      str += `.${ms.toString().padStart(3, '0')}`;
+    }
+    return str;
+  };
+
+  const formatTimeCanvas = (timeInSeconds: number, showMs = true) => {
     const hrs = Math.floor(timeInSeconds / 3600);
     const min = Math.floor((timeInSeconds % 3600) / 60);
     const sec = Math.floor(timeInSeconds % 60);
@@ -532,16 +670,17 @@ function App() {
   return (
     <div className="app-container">
       <header className="header glass-panel">
-        <h1 className="app-title"><span className="text-grey">Cutter</span><span className="text-gold-shine">Gold</span></h1>
+        <h1 className="app-title">
+          <span className="text-grey">Cutter</span>
+          <span className="text-gold-shine">Gold</span>
+          <span className="brand-badge">v0.0.6 PRO</span>
+        </h1>
         <div style={{ display: 'flex', gap: '10px' }}>
-          <button className="btn" onClick={() => setShowTwitchInput(true)} disabled={isLoadingStream}>
-            <LinkIcon size={18} /> {isLoadingStream ? 'Cargando...' : 'Añadir Twitch VOD'}
+          <button className="btn btn-secondary" onClick={() => setShowTwitchInput(true)} disabled={isLoadingStream}>
+            <LinkIcon size={16} /> {isLoadingStream ? 'Cargando...' : 'Añadir Twitch VOD'}
           </button>
           <button className="btn" onClick={handleSelectVideo} disabled={isLoadingStream}>
-            <Video size={18} /> Select Video
-          </button>
-          <button className="btn btn-secondary" onClick={handleSelectOutputDir}>
-            <FolderOpen size={18} /> {outputDir ? 'Change Output' : 'Select Output'}
+            <Video size={16} /> Seleccionar Video
           </button>
         </div>
       </header>
@@ -561,8 +700,13 @@ function App() {
               />
             ) : (
               <div className="placeholder-video">
-                <Video size={48} opacity={0.5} />
-                <p>No video selected</p>
+                <div className="placeholder-icon-wrap">
+                  <Video size={36} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Sin video seleccionado</h3>
+                  <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>Carga un video local o añade un enlace de Twitch para comenzar a editar</p>
+                </div>
               </div>
             )}
           </div>
@@ -663,7 +807,7 @@ function App() {
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          handleTimeEdit(activeClip.id, 'start', e.target.value);
+                          handleTimeEdit(activeClip.id, 'start', (e.target as HTMLInputElement).value);
                           setEditingTime({ id: null, type: null, value: '' });
                         }
                       }}
@@ -683,7 +827,7 @@ function App() {
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
-                          handleTimeEdit(activeClip.id, 'end', e.target.value);
+                          handleTimeEdit(activeClip.id, 'end', (e.target as HTMLInputElement).value);
                           setEditingTime({ id: null, type: null, value: '' });
                         }
                       }}
@@ -732,64 +876,82 @@ function App() {
                         <strong style={{ fontSize: '0.9rem' }}>{category.name}</strong>
                         <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{category.items.length} clips</span>
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
-                        {category.items.map((clip, index) => (
-                          <button 
-                            key={clip.id}
-                            onClick={() => jumpToClip(clip)}
-                            style={{ 
-                              background: activeClipId === clip.id ? 'var(--accent-primary)' : 'rgba(255,255,255,0.1)',
-                              color: activeClipId === clip.id ? '#111' : 'var(--text-primary)',
-                              border: 'none',
-                              padding: '5px 10px',
-                              borderRadius: '4px',
-                              fontSize: '0.8rem',
-                              cursor: 'pointer',
-                              fontWeight: activeClipId === clip.id ? 'bold' : 'normal'
-                            }}
-                          >
-                            Clip {index + 1}
-                          </button>
-                        ))}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {category.items.map((clip, index) => {
+                          const isActive = activeClipId === clip.id;
+                          return (
+                            <button 
+                              key={clip.id}
+                              onClick={() => jumpToClip(clip)}
+                              className={`clip-nav-btn ${isActive ? 'active' : ''}`}
+                              style={{
+                                borderLeft: isActive ? undefined : `3px solid ${clip.colorValue}`
+                              }}
+                            >
+                              <span style={{
+                                width: '8px',
+                                height: '8px',
+                                borderRadius: '50%',
+                                backgroundColor: isActive ? '#090a0f' : clip.colorValue,
+                                display: 'inline-block'
+                              }} />
+                              Clip {index + 1}
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
-
           </div>
 
           <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '15px', marginTop: 'auto' }}>
-            <div style={{ marginBottom: '15px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              <strong>Output:</strong> {outputDir || 'Not selected'}
+            <div style={{ marginBottom: '12px' }}>
+              <button 
+                className="btn btn-secondary"
+                onClick={handleSelectOutputDir}
+                style={{ 
+                  width: '100%',
+                  padding: '11px 14px', 
+                  justifyContent: 'space-between',
+                  fontSize: '0.86rem'
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '85%' }}>
+                  <FolderOpen size={18} />
+                  <span>{outputDir ? outputDir : 'Seleccionar Carpeta Destino'}</span>
+                </span>
+                {outputDir && <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>✓</span>}
+              </button>
             </div>
             
             <div style={{ marginBottom: '15px' }}>
-              <p style={{ marginBottom: '8px', fontSize: '0.9rem', color: 'var(--accent-primary)' }}><strong>Export Quality:</strong></p>
+              <p style={{ marginBottom: '8px', fontSize: '0.85rem', color: 'var(--gold-light)' }}><strong>Calidad de Exportación:</strong></p>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="fhd" checked={exportQuality === 'fhd'} onChange={(e) => setExportQuality(e.target.value)} />
+                  <input type="radio" name="quality" value="fhd" checked={exportQuality === 'fhd'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
                   FHD (1080p)
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="hd" checked={exportQuality === 'hd'} onChange={(e) => setExportQuality(e.target.value)} />
+                  <input type="radio" name="quality" value="hd" checked={exportQuality === 'hd'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
                   HD (720p)
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="source" checked={exportQuality === 'source'} onChange={(e) => setExportQuality(e.target.value)} />
-                  Source
+                  <input type="radio" name="quality" value="source" checked={exportQuality === 'source'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
+                  Original
                 </label>
               </div>
             </div>
 
             <button 
               className="btn btn-gold-glow" 
-              style={{ width: '100%', padding: '15px', fontSize: '1.1rem' }}
+              style={{ width: '100%', padding: '14px', fontSize: '1.05rem' }}
               onClick={handleExport}
               disabled={!videoFile || !outputDir || clips.length === 0 || exporting}
             >
-              {exporting ? 'Exporting...' : <><Download size={20} /> Export All Clips</>}
+              {exporting ? 'Exportando...' : <><Download size={20} /> Exportar {clips.length} {clips.length === 1 ? 'Clip' : 'Clips'}</>}
             </button>
           </div>
         </aside>
@@ -814,6 +976,13 @@ function App() {
                 <p style={{ marginTop: '15px', fontSize: '0.85rem', color: 'var(--text-secondary)', opacity: 0.7 }}>
                   Por favor espera, no cierres la aplicación.
                 </p>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ marginTop: '20px', width: '150px' }}
+                  onClick={handleCancelExport}
+                >
+                  Cancelar
+                </button>
               </>
             )}
 
@@ -828,6 +997,7 @@ function App() {
                   onClick={() => {
                     setExportProgress(null);
                     setExporting(false);
+                    setExportId(null);
                   }}
                 >
                   Aceptar
@@ -839,13 +1009,35 @@ function App() {
               <>
                 <div style={{ fontSize: '3rem', color: 'var(--danger)', marginBottom: '15px' }}>✗</div>
                 <h2 style={{ color: 'var(--danger)', marginBottom: '10px' }}>Error en la exportación</h2>
-                <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>Ocurrió un error al procesar los videos.</p>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>
+                  {exportProgress.error ? `Error: ${exportProgress.error}` : 'Ocurrió un error al procesar los videos.'}
+                </p>
                 <button 
                   className="btn btn-secondary" 
                   style={{ margin: '0 auto', width: '150px' }}
                   onClick={() => {
                     setExportProgress(null);
                     setExporting(false);
+                    setExportId(null);
+                  }}
+                >
+                  Cerrar
+                </button>
+              </>
+            )}
+
+            {exportProgress.status === 'cancelled' && (
+              <>
+                <div style={{ fontSize: '3rem', color: 'var(--accent-primary)', marginBottom: '15px' }}>⏹</div>
+                <h2 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>Exportación Cancelada</h2>
+                <p style={{ color: 'var(--text-secondary)', marginBottom: '20px' }}>La exportación ha sido cancelada por el usuario.</p>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ margin: '0 auto', width: '150px' }}
+                  onClick={() => {
+                    setExportProgress(null);
+                    setExporting(false);
+                    setExportId(null);
                   }}
                 >
                   Cerrar

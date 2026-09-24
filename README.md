@@ -113,13 +113,13 @@ Los ejecutables se generarán en la carpeta `release/`.
 
 ---
 
-## 🌟 Novedades y Soluciones en v0.0.7
+## 🌟 Novedades y Soluciones en v0.0.8
 
-- 🖥️ **Solución de Pantalla Blanca en Producción**: Corrección de la ruta de resolución para cargar `dist/index.html` en ejecutables empaquetados mediante `app.getAppPath()` y `loadFile()`.
+- 🎯 **Solución Definitiva a FFmpeg ENOENT en Producción**: Detección obligatoria de binarios dentro de `app.asar.unpacked` para evitar que Electron intente ejecutar `ffmpeg.exe` desde dentro del archivo comprimido `app.asar`.
+- 🖥️ **Corrección de Pantalla Blanca en Producción**: Carga robusta de `dist/index.html` mediante `app.getAppPath()` y `loadFile()`.
 - 🖼️ **Icono de Aplicación y Ventana**: Inclusión de `icon.png` en el bundle y configuración en la ventana principal.
 - 🎨 **Menú Oculto por Defecto**: Barra de menú nativa oculta para una experiencia de usuario moderna y limpia.
 - ⚡ **Migración Completa a TypeScript**: Tipado estricto en frontend React 19 y backend Electron.
-- 🎯 **Solución de FFmpeg ENOENT**: Detección y resolución automática de rutas de binarios `ffmpeg.exe` y `yt-dlp.exe` en desarrollo y producción.
 - 📁 **Selector de Carpeta Nativo**: Diálogo nativo del sistema para elegir el directorio de exportación.
 - 🎚️ **Línea de Tiempo y Cabezal Interactivo**: Arrastre del cabezal en vivo y salto instantáneo a clips.
 

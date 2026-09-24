@@ -74,26 +74,27 @@ function getBinaryPath(binaryName: string): string {
   const execName = isWin ? `${binaryName}.exe` : binaryName;
   
   const possiblePaths = [
-    path.join(__dirname, '..', '..', 'node_modules', 'yt-dlp-exec', 'bin', execName),
-    path.join(__dirname, '..', 'node_modules', 'yt-dlp-exec', 'bin', execName),
     path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'yt-dlp-exec', 'bin', execName),
     path.join(process.resourcesPath, 'extraResources', execName),
-    execName
+    path.join(__dirname, '..', '..', 'node_modules', 'yt-dlp-exec', 'bin', execName),
+    path.join(__dirname, '..', 'node_modules', 'yt-dlp-exec', 'bin', execName),
+    path.join(app.getAppPath(), 'node_modules', 'yt-dlp-exec', 'bin', execName),
   ];
   
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
+    if (fs.existsSync(p) && !p.includes('app.asar' + path.sep) && !p.endsWith('app.asar')) {
       return p;
     }
   }
   
-  return possiblePaths[0];
+  return path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'yt-dlp-exec', 'bin', execName);
 }
 
 function getFfmpegPath(): string {
-  if (typeof ffmpegStatic === 'string' && fs.existsSync(ffmpegStatic)) {
-    return ffmpegStatic;
-  }
+  const isWin = process.platform === 'win32';
+  const execName = isWin ? 'ffmpeg.exe' : 'ffmpeg';
+
+  // 1. If ffmpeg-static provides a path, prioritize replacing app.asar with app.asar.unpacked
   if (typeof ffmpegStatic === 'string') {
     const unpacked = ffmpegStatic.replace('app.asar', 'app.asar.unpacked');
     if (fs.existsSync(unpacked)) {
@@ -101,24 +102,27 @@ function getFfmpegPath(): string {
     }
   }
 
-  const isWin = process.platform === 'win32';
-  const execName = isWin ? 'ffmpeg.exe' : 'ffmpeg';
-
+  // 2. Check unpacked / resources / dev paths
   const possiblePaths = [
-    path.join(__dirname, '..', '..', 'node_modules', 'ffmpeg-static', execName),
-    path.join(__dirname, '..', 'node_modules', 'ffmpeg-static', execName),
     path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', execName),
     path.join(process.resourcesPath, 'extraResources', execName),
-    execName
+    path.join(__dirname, '..', '..', 'node_modules', 'ffmpeg-static', execName),
+    path.join(__dirname, '..', 'node_modules', 'ffmpeg-static', execName),
+    path.join(app.getAppPath(), 'node_modules', 'ffmpeg-static', execName),
   ];
 
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
+    if (fs.existsSync(p) && !p.includes('app.asar' + path.sep) && !p.endsWith('app.asar')) {
       return p;
     }
   }
 
-  return execName;
+  // 3. Fallback for unpacked dev mode
+  if (typeof ffmpegStatic === 'string' && !ffmpegStatic.includes('app.asar') && fs.existsSync(ffmpegStatic)) {
+    return ffmpegStatic;
+  }
+
+  return path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'ffmpeg-static', execName);
 }
 
 interface ClipData {

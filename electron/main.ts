@@ -15,9 +15,23 @@ let mainWindow: BrowserWindow | null = null;
 const ffmpegProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 
 function createWindow(): void {
+  const possibleIconPaths = [
+    path.join(app.getAppPath(), 'icon.png'),
+    path.join(__dirname, '../../icon.png'),
+    path.join(__dirname, '../icon.png'),
+    path.join(process.resourcesPath, 'icon.png')
+  ];
+  const iconPath = possibleIconPaths.find(p => fs.existsSync(p));
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1280,
+    height: 820,
+    minWidth: 900,
+    minHeight: 600,
+    title: 'CutterGold',
+    icon: iconPath,
+    autoHideMenuBar: true,
+    backgroundColor: '#0f172a',
     webPreferences: {
       preload: fs.existsSync(path.join(__dirname, 'preload.js'))
         ? path.join(__dirname, 'preload.js')
@@ -28,13 +42,28 @@ function createWindow(): void {
     },
   });
 
-  const startUrl = process.env.VITE_DEV_SERVER_URL || `file://${path.join(__dirname, '../dist/index.html')}`;
-  mainWindow.loadURL(startUrl);
+  mainWindow.setMenuBarVisibility(false);
 
   if (process.env.VITE_DEV_SERVER_URL) {
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
+  } else {
+    const possibleHtmlPaths = [
+      path.join(app.getAppPath(), 'dist/index.html'),
+      path.join(__dirname, '../../dist/index.html'),
+      path.join(__dirname, '../dist/index.html'),
+      path.join(__dirname, 'dist/index.html')
+    ];
+    const htmlPath = possibleHtmlPaths.find(p => fs.existsSync(p));
+    if (htmlPath) {
+      mainWindow.loadFile(htmlPath);
+    } else {
+      mainWindow.loadFile(path.join(app.getAppPath(), 'dist/index.html')).catch(err => {
+        console.error('Failed to load html:', err);
+      });
+    }
   }
-  
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });

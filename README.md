@@ -113,14 +113,15 @@ Los ejecutables se generarán en la carpeta `release/`.
 
 ---
 
-## 🌟 Novedades y Soluciones en v0.0.6
+## 🌟 Novedades y Soluciones en v0.0.7
 
-- ⚡ **Migración Completa a TypeScript**: Migración integral de JavaScript a TypeScript en frontend y backend para mayor estabilidad y detección temprana de errores.
-- 🛠️ **Arquitectura Dual ESM/CJS en Electron**: Compilación dedicada de `preload.ts` a CommonJS para compatibilidad estricta con el sandbox de Electron, manteniendo `main.ts` como ES Module.
-- 🎯 **Solución de FFmpeg ENOENT**: Resolución robusta y automática de rutas para los binarios de `ffmpeg.exe` y `yt-dlp.exe` en entornos de desarrollo y empaquetado (`app.asar.unpacked`).
-- 📁 **Selector de Carpeta Nativo**: Corrección del diálogo del sistema para elegir la carpeta de exportación sin bloqueos ni errores en el renderer.
-- 🎚️ **Línea de Tiempo y Playhead Mejorados**: Sincronización instantánea del cabezal de reproducción con arrastre en vivo y salto directo a clips desde el panel de resumen.
-- 🎨 **Rediseño Visual Gold**: Contraste mejorado en botones, resumen de cortes con colores de clips claramente visibles y efectos de foco.
+- 🖥️ **Solución de Pantalla Blanca en Producción**: Corrección de la ruta de resolución para cargar `dist/index.html` en ejecutables empaquetados mediante `app.getAppPath()` y `loadFile()`.
+- 🖼️ **Icono de Aplicación y Ventana**: Inclusión de `icon.png` en el bundle y configuración en la ventana principal.
+- 🎨 **Menú Oculto por Defecto**: Barra de menú nativa oculta para una experiencia de usuario moderna y limpia.
+- ⚡ **Migración Completa a TypeScript**: Tipado estricto en frontend React 19 y backend Electron.
+- 🎯 **Solución de FFmpeg ENOENT**: Detección y resolución automática de rutas de binarios `ffmpeg.exe` y `yt-dlp.exe` en desarrollo y producción.
+- 📁 **Selector de Carpeta Nativo**: Diálogo nativo del sistema para elegir el directorio de exportación.
+- 🎚️ **Línea de Tiempo y Cabezal Interactivo**: Arrastre del cabezal en vivo y salto instantáneo a clips.
 
 ---
 

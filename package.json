@@ -1,7 +1,7 @@
 {
   "name": "cuttergold",
   "private": true,
-  "version": "0.0.8",
+  "version": "0.0.9",
   "description": "Una herramienta rápida y avanzada para automatizar y recortar clips de Twitch y videos locales.",
   "author": "Playerdude901",
   "repository": {
@@ -19,7 +19,9 @@
     "electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "electron:dev": "npm run build:electron && concurrently \"npm run dev\" \"npm run electron\"",
     "electron:build": "npm run build && electron-builder",
-    "release": "npm run build && electron-builder --publish always"
+    "release": "npm run build && electron-builder --publish always",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:electron": "npm run build && electron tests/electron-smoke.mjs"
   },
   "build": {
     "appId": "com.cuttergold.app",
@@ -45,12 +47,27 @@
       "target": [
         "nsis"
       ],
-      "icon": "icon.png"
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    }
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "CutterGold",
+      "include": "build/installer.nsh",
+      "artifactName": "CutterGold-Setup-${version}-${arch}.${ext}"
+    },
+    "extraResources": [
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
+      }
+    ]
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
@@ -78,7 +95,11 @@
     "globals": "^17.6.0",
     "tsx": "^4.19.2",
     "typescript": "^5.6.2",
+    "typescript-eslint": "^8.70.1",
     "vite": "^5.4.14",
     "wait-on": "^9.0.10"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

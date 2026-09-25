@@ -6,16 +6,24 @@ import fs from 'fs';
 import ffmpegStatic from 'ffmpeg-static';
 import ytDlp from 'yt-dlp-exec';
 import pkg from 'electron-updater';
+import { registerClipScoreSettings } from './clipscore-settings.js';
+import { categoryNames, moveExport, reserveOutput, safeName } from './clip-files.js';
+import { randomUUID } from 'node:crypto';
 const { autoUpdater } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Match the identity embedded in the installer and Windows shortcuts.
+if (process.platform === 'win32') app.setAppUserModelId('com.cuttergold.app');
 
 let mainWindow: BrowserWindow | null = null;
 const ffmpegProcesses = new Map<string, ChildProcessWithoutNullStreams>();
 
 function createWindow(): void {
   const possibleIconPaths = [
+    path.join(process.resourcesPath, 'icon.ico'),
+    path.join(app.getAppPath(), 'build', 'icon.ico'),
     path.join(app.getAppPath(), 'icon.png'),
     path.join(__dirname, '../../icon.png'),
     path.join(__dirname, '../icon.png'),
@@ -131,6 +139,7 @@ interface ClipData {
   endTime: number;
   color: string;
   colorValue: string;
+  category?: string;
 }
 
 interface ExportProgress {
@@ -143,6 +152,7 @@ interface ExportProgress {
 
 app.whenReady().then(() => {
   createWindow();
+  registerClipScoreSettings();
 
   autoUpdater.autoDownload = false;
   autoUpdater.checkForUpdatesAndNotify();
@@ -269,6 +279,7 @@ ipcMain.handle('get-stream-url', async (_event: IpcMainInvokeEvent, url: string)
 
 // 3. Export clips
 interface ExportClipsParams {
+  exportId?: string;
   videoPath: string;
   outputDir: string;
   clips: ClipData[];
@@ -282,126 +293,81 @@ interface ExportResult {
   cancelled?: boolean;
 }
 
+// Only paths produced by this process are eligible for moving; never accept a
+// renderer-supplied original path. Range and quality changes invalidate reuse.
+const exportedFiles = new Map<string, string>();
+const exportJobs = new Map<string, { cancelled: boolean }>();
+
 ipcMain.handle('export-clips', async (event: IpcMainInvokeEvent, params: ExportClipsParams): Promise<ExportResult> => {
   const { videoPath, outputDir, clips, quality } = params;
-  
-  if (!videoPath || !outputDir || !clips || !Array.isArray(clips) || clips.length === 0) {
+  if (exportJobs.size) return { success: false, error: 'Ya hay una exportación en curso' };
+  if (typeof videoPath !== 'string' || !videoPath || typeof outputDir !== 'string' || !path.isAbsolute(outputDir) ||
+      !Array.isArray(clips) || !clips.length || !['source', 'hd', 'fhd'].includes(quality) ||
+      clips.some(c => !c || typeof c.id !== 'string' || typeof c.color !== 'string' ||
+        !Number.isFinite(c.startTime) || !Number.isFinite(c.endTime) || c.startTime < 0 || c.endTime <= c.startTime ||
+        (c.category !== undefined && !categoryNames.includes(c.category)))) {
     return { success: false, error: 'Parámetros inválidos para exportación' };
   }
-  
-  if (!mainWindow) {
-    return { success: false, error: 'Ventana principal no disponible' };
-  }
-
-  const exportId = Date.now().toString();
-  let cancelled = false;
-  
-  const cancelHandler = (_e: IpcMainInvokeEvent, id: string) => {
-    if (id === exportId) {
-      cancelled = true;
-      const proc = ffmpegProcesses.get(exportId);
-      if (proc) proc.kill('SIGTERM');
-    }
-  };
-  ipcMain.once('cancel-export', cancelHandler);
-
+  const exportId = params.exportId || randomUUID();
+  const job = { cancelled: false };
+  exportJobs.set(exportId, job);
+  const results: string[] = [];
+  let pendingPath: string | undefined;
   try {
-    const results: string[] = [];
     for (let i = 0; i < clips.length; i++) {
-      if (cancelled) {
-        return { success: false, error: 'Exportación cancelada por el usuario', cancelled: true };
-      }
-      
+      if (job.cancelled) break;
       const clip = clips[i];
-      const colorDir = path.join(outputDir, clip.color);
-      
-      if (!fs.existsSync(colorDir)) {
-        fs.mkdirSync(colorDir, { recursive: true });
-      }
-
-      let ext = path.extname(videoPath);
-      let baseName = path.basename(videoPath, ext);
-
-      if (videoPath.startsWith('http') || ext.includes('.m3u8')) {
-        ext = '.mp4';
-        baseName = 'Twitch_VOD';
-      }
-
-      const outputPath = path.join(colorDir, `${baseName}_clip_${i + 1}${ext}`);
-
+      const directory = path.join(outputDir, clip.category ?? safeName(clip.color));
+      const key = JSON.stringify([videoPath, clip.id, clip.startTime, clip.endTime, quality]);
+      const existing = exportedFiles.get(key);
       event.sender.send('export-progress', { current: i + 1, total: clips.length, status: 'processing' });
-
-      const start = clip.startTime;
-      const duration = clip.endTime - clip.startTime;
-
-      let ffmpegArgs: string[] = [
-        '-y',
-        '-ss', start.toString(),
-        '-i', videoPath,
-        '-t', duration.toString()
-      ];
-
-      if (quality === 'fhd') {
-        ffmpegArgs.push('-vf', 'scale=-2:1080');
-      } else if (quality === 'hd') {
-        ffmpegArgs.push('-vf', 'scale=-2:720');
-      } else {
-        ffmpegArgs.push('-c', 'copy');
+      if (clip.category && existing && fs.existsSync(existing)) {
+        const moved = await moveExport(existing, directory);
+        exportedFiles.set(key, moved);
+        results.push(moved);
+        continue;
       }
-
-      ffmpegArgs.push(outputPath);
-
-      await new Promise<void>((res, rej) => {
-        if (cancelled) {
-          rej(new Error('Exportación cancelada'));
-          return;
-        }
-        
-        const resolvedFfmpegPath = getFfmpegPath();
-        
-        const ffmpeg = spawn(resolvedFfmpegPath, ffmpegArgs);
-        ffmpegProcesses.set(exportId, ffmpeg);
-
-        ffmpeg.on('close', (code: number | null) => {
+      const remote = /^https?:/i.test(videoPath);
+      const extension = remote ? '.mp4' : path.extname(videoPath).toLowerCase();
+      const outputExtension = ['.mp4', '.mkv', '.avi', '.mov', '.webm'].includes(extension) ? extension : '.mp4';
+      const base = remote ? 'Twitch_VOD' : path.basename(videoPath, path.extname(videoPath));
+      pendingPath = await reserveOutput(directory, `${base}_clip_${i + 1}`, outputExtension);
+      const args = ['-nostdin', '-y', '-ss', String(clip.startTime), '-i', videoPath, '-t', String(clip.endTime - clip.startTime)];
+      if (quality === 'source') args.push('-c', 'copy');
+      else args.push('-vf', quality === 'fhd' ? 'scale=-2:1080' : 'scale=-2:720');
+      args.push(pendingPath);
+      await new Promise<void>((resolve, reject) => {
+        if (job.cancelled) { reject(new Error('Exportación cancelada')); return; }
+        const proc = spawn(getFfmpegPath(), args, { windowsHide: true });
+        ffmpegProcesses.set(exportId, proc);
+        let diagnostics = '';
+        proc.stderr.on('data', (data: Buffer) => { diagnostics = (diagnostics + data.toString()).slice(-2000); });
+        proc.on('error', reject);
+        proc.on('close', code => {
           ffmpegProcesses.delete(exportId);
-          if (cancelled) {
-            rej(new Error('Exportación cancelada'));
-            return;
-          }
-          if (code === 0) {
-            results.push(outputPath);
-            res();
-          } else {
-            rej(new Error(`FFmpeg exited with code ${code}`));
-          }
-        });
-        
-        ffmpeg.on('error', (err: Error) => {
-          ffmpegProcesses.delete(exportId);
-          rej(err);
-        });
-        
-        ffmpeg.stderr.on('data', (data: Buffer) => {
-          console.log(`FFmpeg: ${data}`);
+          if (job.cancelled) reject(new Error('Exportación cancelada'));
+          else if (code === 0) resolve();
+          else reject(new Error(`FFmpeg (${code}): ${diagnostics}`));
         });
       });
+      exportedFiles.set(key, pendingPath);
+      results.push(pendingPath);
+      pendingPath = undefined;
     }
-    return { success: true, files: results };
-  } catch (err) {
-    console.error(err);
-    return { success: false, error: err instanceof Error ? err.message : 'Error desconocido' };
+    return { success: !job.cancelled, cancelled: job.cancelled, files: results };
+  } catch (error) {
+    return { success: false, cancelled: job.cancelled, files: results, error: error instanceof Error ? error.message : 'Error de exportación' };
   } finally {
-    ipcMain.off('cancel-export', cancelHandler);
+    if (pendingPath) await fs.promises.unlink(pendingPath).catch(() => {});
+    exportJobs.delete(exportId);
     ffmpegProcesses.delete(exportId);
   }
 });
 
-// 4. Cancel export
 ipcMain.handle('cancel-export', async (_event: IpcMainInvokeEvent, exportId: string): Promise<{ success: boolean; error?: string }> => {
-  const proc = ffmpegProcesses.get(exportId);
-  if (proc) {
-    proc.kill('SIGTERM');
-    return { success: true };
-  }
-  return { success: false, error: 'No hay exportación en curso' };
+  const job = exportJobs.get(exportId);
+  if (!job) return { success: false, error: 'No hay exportación en curso' };
+  job.cancelled = true;
+  ffmpegProcesses.get(exportId)?.kill('SIGTERM');
+  return { success: true };
 });

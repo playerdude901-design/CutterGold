@@ -3,6 +3,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { Video, FolderOpen, Download, Play, Pause, Trash2, Plus, Link as LinkIcon } from 'lucide-react';
 import Hls from 'hls.js';
 import './App.css';
+import { ClipScore } from './clipscore/ClipScore';
+import { Settings } from './clipscore/Settings';
+import type { Clip, Reviews } from './clipscore/model';
 
 const COLORS = [
   { name: 'Red', value: '#ef4444' },
@@ -16,7 +19,7 @@ function App() {
   const [videoFile, setVideoFile] = useState<string | null>(null);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [outputDir, setOutputDir] = useState<string | null>(null);
-  const [clips, setClips] = useState<any[]>([]);
+  const [clips, setClips] = useState<Clip[]>([]);
   const [zoomLevel, setZoomLevel] = useState<number>(100);
   const [duration, setDuration] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -32,6 +35,10 @@ function App() {
   const [showUpdateNotice, setShowUpdateNotice] = useState<boolean>(true);
   const [exportId, setExportId] = useState<string | null>(null);
   
+  const [showClipScore, setShowClipScore] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [reviews, setReviews] = useState<Reviews>({});
+
   // Interactive States
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
   const [dragInfo, setDragInfo] = useState<any>(null);
@@ -67,7 +74,7 @@ function App() {
 
   useEffect(() => {
     if (window.api && window.api.onExportProgress) {
-      window.api.onExportProgress((progress) => {
+      return window.api.onExportProgress((progress) => {
         setExportProgress(progress);
       });
     }
@@ -80,6 +87,7 @@ function App() {
         setVideoFile(filePath);
         setVideoSrc(`file://${filePath}`);
         setClips([]);
+        setReviews({});
         setActiveClipId(null);
       }
     } else {
@@ -94,6 +102,7 @@ function App() {
           setVideoFile(objectUrl);
           setVideoSrc(objectUrl);
           setClips([]);
+          setReviews({});
           setActiveClipId(null);
         }
       };
@@ -121,6 +130,7 @@ function App() {
     setVideoFile(url);
     setVideoSrc(url);
     setClips([]);
+    setReviews({});
     setActiveClipId(null);
   };
 
@@ -202,7 +212,7 @@ function App() {
   };
 
   const addClip = () => {
-    if (!duration) return;
+    if (!Number.isFinite(duration) || duration - currentTime < 0.5) return;
     const start = currentTime;
     const end = Math.min(currentTime + 5, duration);
     const newClip = {
@@ -290,6 +300,7 @@ function App() {
         videoPath: videoFile,
         outputDir: outputDir,
         clips: clips,
+        exportId: id,
         quality: exportQuality
       });
       
@@ -348,15 +359,15 @@ function App() {
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
       const vidDuration = videoRef.current.duration;
-      setDuration(vidDuration);
+      setDuration(Number.isFinite(vidDuration) ? vidDuration : 0);
       
       // Auto-fit timeline to screen width initially
-      if (timelineScrollRef.current && vidDuration > 0) {
+      if (timelineScrollRef.current && Number.isFinite(vidDuration) && vidDuration > 0) {
         const containerWidth = timelineScrollRef.current.clientWidth;
         // Calculate pixels per second needed to fit the whole duration exactly into the container
         let initialZoom = containerWidth / vidDuration;
         // Clamp to sensible defaults just in case
-        initialZoom = Math.max(0.1, Math.min(initialZoom, 1000));
+        initialZoom = Math.max(0.0001, Math.min(initialZoom, 1000));
         setZoomLevel(initialZoom);
       }
     }
@@ -669,13 +680,17 @@ function App() {
 
   return (
     <div className="app-container">
+      {showClipScore && videoSrc && videoFile && clips.length > 0 && <ClipScore source={videoSrc} videoPath={videoFile} clips={clips} reviews={reviews} onReviews={setReviews} quality={exportQuality} onClose={() => setShowClipScore(false)} />}
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       <header className="header glass-panel">
         <h1 className="app-title">
           <span className="text-grey">Cutter</span>
           <span className="text-gold-shine">Gold</span>
-          <span className="brand-badge">v0.0.6 PRO</span>
+          <span className="brand-badge">v0.0.9 PRO</span>
         </h1>
         <div style={{ display: 'flex', gap: '10px' }}>
+          <button className="btn btn-secondary" onClick={() => setShowSettings(true)}>Settings</button>
+          <button className="btn" disabled={!clips.length || exporting || !videoSrc} onClick={() => { videoRef.current?.pause(); setShowClipScore(true); }}>Revisar clips</button>
           <button className="btn btn-secondary" onClick={() => setShowTwitchInput(true)} disabled={isLoadingStream}>
             <LinkIcon size={16} /> {isLoadingStream ? 'Cargando...' : 'Añadir Twitch VOD'}
           </button>
@@ -798,9 +813,9 @@ function App() {
                     <strong style={{ width: '40px' }}>In:</strong> 
                     <input 
                       type="text" 
-                      value={editingTime.id === activeClip.id && editingTime.type === 'start' ? editingTime.value : formatTime(activeClip.startTime)}
+                      value={editingTime.id === activeClip.id && editingTime.type === 'start' ? editingTime.value : formatTime(activeClip.startTime, true)}
                       onChange={(e) => setEditingTime({ id: activeClip.id, type: 'start', value: e.target.value })}
-                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'start', value: formatTime(activeClip.startTime) })}
+                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'start', value: formatTime(activeClip.startTime, true) })}
                       onBlur={(e) => {
                         handleTimeEdit(activeClip.id, 'start', e.target.value);
                         setEditingTime({ id: null, type: null, value: '' });
@@ -818,9 +833,9 @@ function App() {
                     <strong style={{ width: '40px' }}>Out:</strong> 
                     <input 
                       type="text" 
-                      value={editingTime.id === activeClip.id && editingTime.type === 'end' ? editingTime.value : formatTime(activeClip.endTime)}
+                      value={editingTime.id === activeClip.id && editingTime.type === 'end' ? editingTime.value : formatTime(activeClip.endTime, true)}
                       onChange={(e) => setEditingTime({ id: activeClip.id, type: 'end', value: e.target.value })}
-                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'end', value: formatTime(activeClip.endTime) })}
+                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'end', value: formatTime(activeClip.endTime, true) })}
                       onBlur={(e) => {
                         handleTimeEdit(activeClip.id, 'end', e.target.value);
                         setEditingTime({ id: null, type: null, value: '' });
@@ -1097,19 +1112,18 @@ function App() {
         </div>
       )}
 
-      {/* Update 0.0.5 Notice Modal */}
+      {/* Release 0.0.9 Notice Modal */}
       {showUpdateNotice && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ padding: '30px', maxWidth: '450px', textAlign: 'center' }}>
-            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.5!</h2>
-            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>Features & Fixes</h3>
+            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.9!</h2>
+            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>ClipScore e iconos de Windows</h3>
             <ul style={{ textAlign: 'left', color: 'var(--text-secondary)', marginBottom: '25px', lineHeight: '1.6', fontSize: '0.95rem', paddingLeft: '20px' }}>
-              <li><strong>HOTFIX:</strong> Corregido error al importar Twitch VODs en la versión instalable de producción.</li>
-              <li><strong>NUEVO:</strong> Integración de Twitch VODs. ¡Solo pega el link!</li>
-              <li><strong>NUEVO:</strong> Selector de calidades al importar streams.</li>
-              <li><strong>NUEVO:</strong> Edición manual de tiempos en el panel lateral.</li>
-              <li><strong>FIX:</strong> La línea de tiempo ahora es adaptativa con límite de zoom.</li>
-              <li><strong>FIX:</strong> Los cortes en los streams se exportan en `.mp4` correctamente.</li>
+              <li><strong>CLIPSCORE:</strong> Revisa y califica tus clips con cinco preguntas y un score de 0 a 10.</li>
+              <li><strong>EXPORTACIÓN:</strong> Organiza los archivos por categoría sin sobrescribir tus clips anteriores.</li>
+              <li><strong>SUGERENCIAS:</strong> Consejos locales de edición u OpenRouter opcional desde Settings.</li>
+              <li><strong>WINDOWS:</strong> Iconos del ejecutable, instalador y desinstalador; reparación del acceso directo del escritorio.</li>
+              <li><strong>PRECISIÓN:</strong> Tiempos con milisegundos y cancelación de exportaciones corregida.</li>
             </ul>
             <button className="btn btn-gold-glow" style={{ padding: '10px 30px', fontSize: '1.1rem' }} onClick={() => setShowUpdateNotice(false)}>
               Enterado

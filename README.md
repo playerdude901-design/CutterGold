@@ -1,10 +1,90 @@
-# CutterGold 🎬✨
+# CutterGold 0.0.9 🎬✨
 
-Una herramienta de escritorio rápida, moderna y avanzada para automatizar, previsualizar y recortar clips de streams (Twitch/YouTube) y videos locales con precisión quirúrgica.
+Recorta videos locales y VODs de Twitch/YouTube, revisa tus mejores momentos con
+ClipScore y exporta clips organizados por categoría.
 
-![CutterGold Banner](icon.png)
+[Descargar CutterGold 0.0.9 para Windows x64](https://github.com/playerdude901-design/CutterGold/releases/download/v0.0.9/CutterGold-Setup-0.0.9-x64.exe)
+· [Ver la release](https://github.com/playerdude901-design/CutterGold/releases/tag/v0.0.9)
 
----
+## Instalación y actualización en Windows
+
+1. Descarga y ejecuta `CutterGold-Setup-0.0.9-x64.exe`.
+2. Selecciona la carpeta de instalación y completa el asistente.
+3. Abre **CutterGold** desde el escritorio o el menú Inicio.
+
+La versión 0.0.9 incorpora el icono multirresolución en el ejecutable, instalador,
+desinstalador y ventana. El acceso directo del escritorio usa el icono instalado
+en `resources/icon.ico`. Las instalaciones y actualizaciones reparan el acceso
+directo y notifican el cambio a Windows, sin borrar la caché global de iconos.
+Si vienes de una versión sin acceso directo, ejecutar este instalador lo restaura;
+no es necesario eliminar tus videos ni la configuración de la aplicación.
+
+## Novedades de 0.0.9
+
+- **ClipScore:** revisión por clip, cinco preguntas, puntuación de 0–10 y resumen.
+- **Exportación por categoría:** Excelente, Bueno, Dudoso y Descartar; selección
+  de categorías y duración total, movimiento de exportaciones de la sesión sin
+  recodificar y protección contra sobrescrituras.
+- **OpenRouter opcional:** API key cifrada, modelo configurable y respaldo local.
+- **Windows:** iconos consistentes antes, durante y después de instalar; reparación
+  del acceso del escritorio también durante actualizaciones.
+- **Correcciones:** cancelación de exportaciones, edición con milisegundos,
+  ajuste inicial de la timeline en videos largos y prevención de clips vacíos.
+- **Verificación:** pruebas de puntuación, archivos, Electron, FFmpeg y empaquetado.
+
+
+## ClipScore
+
+Después de crear tus cortes, pulsa **Revisar clips**. La revisión se abre sobre la
+timeline, ordena los clips por inicio y reproduce únicamente el rango seleccionado.
+Puedes silenciar, pausar, repetir y desplazar el cabezal dentro del clip.
+Responde las cinco preguntas para avanzar; **Anterior** permite corregir respuestas.
+Al terminar, **Ver resumen** muestra cantidades, porcentajes y duración seleccionada.
+Las tarjetas permiten incluir o excluir categorías de la exportación.
+
+La puntuación es determinista: reacción 0–3, momento pico 0–2, duración 0–2,
+utilidad 0–2 y potencial viral 0–1. Categorías: Excelente 8–10, Bueno 5–7,
+Dudoso 2–4 y Descartar 0–1. Una revisión incompleta no recibe categoría.
+
+**Exportar clips** abre el selector nativo y organiza el resultado en
+`Excelente/`, `Bueno/`, `Dudoso/` y `Descartar/`, según las categorías incluidas.
+Los rangos sin archivo se exportan con FFmpeg usando la calidad de la timeline.
+Los archivos exportados en la misma sesión, con los mismos límites y calidad,
+se mueven sin recodificación. Nunca se mueve el video fuente ni se sobrescriben
+archivos existentes. Al cancelar o fallar, se conservan los clips completados y
+se elimina únicamente la salida incompleta. Puedes reintentar desde el resumen.
+La calidad Original usa copia de streams y mantiene las limitaciones de precisión
+de los fotogramas clave de FFmpeg; HD/FHD recodifican.
+
+**Editar selección** vuelve a la timeline. Las respuestas sobreviven al cierre de
+ClipScore durante la sesión; cambiar el inicio o fin exige revisar ese corte de
+nuevo. Las respuestas y el registro de archivos exportados no persisten tras
+cerrar la aplicación. Los archivos exportados en sesiones anteriores no se mueven
+automáticamente: se genera una nueva exportación sin sobrescribirlos.
+
+### Sugerencias y Settings
+
+Sin configuración se usa una sugerencia local. En **Settings** puedes guardar una
+API key de OpenRouter y un modelo opcional (vacío usa el predeterminado de tu cuenta).
+La clave se cifra mediante Electron `safeStorage` en el perfil de la aplicación y
+no se devuelve a la interfaz. Al abrir el resumen, solo se envían cantidades por
+categoría y duración; no se envían videos, rutas ni nombres. La petición tiene
+un tiempo máximo de 20 segundos y recurre al texto local ante cualquier fallo.
+Consulta el [contrato de la API de OpenRouter](https://openrouter.ai/docs/api/reference/overview).
+
+### Verificación de ClipScore
+
+```bash
+npm test               # puntuación, archivos e iconos de Windows
+npm run lint
+npm run build
+npm run test:electron  # integración real con video sintético y FFmpeg
+```
+
+La prueba de Electron usa un perfil temporal, no usa claves reales ni llama a
+OpenRouter; verifica cifrado, navegación, exportación, movimiento y cancelación.
+Guarda capturas en `test-artifacts/`. El flujo con un VOD remoto y la respuesta
+real de OpenRouter requieren una fuente vigente y una clave válida, respectivamente.
 
 ## 🚀 Características Principales
 
@@ -56,7 +136,9 @@ CutterGold/
 ├── electron/
 │   ├── main.ts              # Proceso principal (IPC, descarga, spawn FFmpeg/yt-dlp)
 │   └── preload.ts           # Preload seguro (CommonJS contextBridge)
+├── build/                   # Icono ICO y reparación del acceso de Windows
 ├── src/
+│   ├── clipscore/            # Revisión, scoring, resumen y Settings
 │   ├── App.tsx              # Componente principal de UI y lógica de reproducción
 │   ├── index.css            # Sistema de diseño, temas y utilidades Glassmorphism
 │   └── main.tsx             # Punto de entrada React
@@ -70,7 +152,7 @@ CutterGold/
 ## 💻 Instalación y Desarrollo
 
 ### Requisitos Previos
-- [Node.js](https://nodejs.org/) v18 o superior
+- [Node.js](https://nodejs.org/) 22.13 o superior (CI: Node.js 22)
 - Git
 
 ### Pasos para Desarrollar
@@ -81,7 +163,7 @@ git clone https://github.com/playerdude901-design/CutterGold.git
 cd CutterGold
 
 # 2. Instalar dependencias
-npm install
+npm ci
 
 # 3. Iniciar en modo desarrollo
 npm run electron:dev
@@ -113,7 +195,7 @@ Los ejecutables se generarán en la carpeta `release/`.
 
 ---
 
-## 🌟 Novedades y Soluciones en v0.0.8
+## Historial: v0.0.8
 
 - 🎯 **Solución Definitiva a FFmpeg ENOENT en Producción**: Detección obligatoria de binarios dentro de `app.asar.unpacked` para evitar que Electron intente ejecutar `ffmpeg.exe` desde dentro del archivo comprimido `app.asar`.
 - 🖥️ **Corrección de Pantalla Blanca en Producción**: Carga robusta de `dist/index.html` mediante `app.getAppPath()` y `loadFile()`.

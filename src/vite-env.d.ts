@@ -10,6 +10,9 @@ interface ImportMeta {
 
 interface Window {
   api: {
+    getClipScoreSettings: () => Promise<{ configured: boolean; model: string }>
+    saveClipScoreSettings: (settings: { apiKey?: string; model: string }) => Promise<void>
+    clipScoreSuggestion: (stats: { counts: Record<string, number>; duration: number }) => Promise<{ text?: string; error?: string }>
     selectVideo: () => Promise<string | null>
     selectOutputDir: () => Promise<string | null>
     getStreamUrl: (url: string) => Promise<{
@@ -25,6 +28,7 @@ interface Window {
       error?: string
     }>
     exportClips: (data: {
+      exportId?: string
       videoPath: string
       outputDir: string
       clips: Array<{
@@ -32,6 +36,7 @@ interface Window {
         startTime: number
         endTime: number
         color: string
+        category?: 'Excelente' | 'Bueno' | 'Dudoso' | 'Descartar'
         colorValue: string
       }>
       quality: 'source' | 'hd' | 'fhd'
@@ -48,6 +53,6 @@ interface Window {
       status: 'processing' | 'done' | 'error' | 'cancelled'
       files?: string[]
       error?: string
-    }) => void) => void
+    }) => void) => (() => void)
   }
 }

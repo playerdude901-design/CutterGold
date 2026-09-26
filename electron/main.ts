@@ -9,6 +9,7 @@ import pkg from 'electron-updater';
 import { registerClipScoreSettings } from './clipscore-settings.js';
 import { categoryNames, moveExport, reserveOutput, safeName } from './clip-files.js';
 import { randomUUID } from 'node:crypto';
+import { analyzeAudioTracks, cancelAudioAnalysis, disposeAudioPreviews, releaseAudioPreviews, setMediaFfmpegPath } from './media-tracks.js';
 const { autoUpdater } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -151,6 +152,7 @@ interface ExportProgress {
 }
 
 app.whenReady().then(() => {
+  setMediaFfmpegPath(getFfmpegPath());
   createWindow();
   registerClipScoreSettings();
 
@@ -197,7 +199,28 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+app.on('before-quit', () => { void disposeAudioPreviews(); });
+
 // IPC Handlers
+
+let currentAudioAnalysisId: string | undefined;
+ipcMain.handle('analyze-audio-tracks', async (event: IpcMainInvokeEvent, source: string, requestId: string) => {
+  if (currentAudioAnalysisId && currentAudioAnalysisId !== requestId) cancelAudioAnalysis(currentAudioAnalysisId);
+  currentAudioAnalysisId = requestId;
+  try {
+    return await analyzeAudioTracks(source, requestId, (current, total, percentage) => {
+      if (requestId !== currentAudioAnalysisId) return;
+      event.sender.send('audio-analysis-progress', { requestId, current, total, percentage });
+    }, (track, percentage, current, total) => {
+      if (requestId !== currentAudioAnalysisId) return;
+      event.sender.send('audio-analysis-progress', { requestId, current, total, percentage, track });
+    });
+  } finally { if (requestId === currentAudioAnalysisId) currentAudioAnalysisId = undefined; }
+});
+
+ipcMain.handle('release-audio-previews', async (_event: IpcMainInvokeEvent, ids: string[]) => {
+  if (Array.isArray(ids)) await releaseAudioPreviews(ids);
+});
 
 // 1. Select a video file
 ipcMain.handle('select-video', async (): Promise<string | null> => {
@@ -332,7 +355,8 @@ ipcMain.handle('export-clips', async (event: IpcMainInvokeEvent, params: ExportC
       const outputExtension = ['.mp4', '.mkv', '.avi', '.mov', '.webm'].includes(extension) ? extension : '.mp4';
       const base = remote ? 'Twitch_VOD' : path.basename(videoPath, path.extname(videoPath));
       pendingPath = await reserveOutput(directory, `${base}_clip_${i + 1}`, outputExtension);
-      const args = ['-nostdin', '-y', '-ss', String(clip.startTime), '-i', videoPath, '-t', String(clip.endTime - clip.startTime)];
+      const args = ['-nostdin', '-y', '-ss', String(clip.startTime), '-i', videoPath, '-t', String(clip.endTime - clip.startTime),
+        '-map', '0:v:0?', '-map', '0:a?'];
       if (quality === 'source') args.push('-c', 'copy');
       else args.push('-vf', quality === 'fhd' ? 'scale=-2:1080' : 'scale=-2:720');
       args.push(pendingPath);

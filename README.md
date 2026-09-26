@@ -1,25 +1,64 @@
-# CutterGold 0.0.9 🎬✨
+# CutterGold 0.1.0 🎬✨
 
 Recorta videos locales y VODs de Twitch/YouTube, revisa tus mejores momentos con
 ClipScore y exporta clips organizados por categoría.
 
-[Descargar CutterGold 0.0.9 para Windows x64](https://github.com/playerdude901-design/CutterGold/releases/download/v0.0.9/CutterGold-Setup-0.0.9-x64.exe)
-· [Ver la release](https://github.com/playerdude901-design/CutterGold/releases/tag/v0.0.9)
+[Descargar CutterGold 0.1.0 para Windows x64](https://github.com/playerdude901-design/CutterGold/releases/download/v0.1.0/CutterGold-Setup-0.1.0-x64.exe)
+· [Ver la release](https://github.com/playerdude901-design/CutterGold/releases/tag/v0.1.0)
+
+## Novedades de 0.1.0
+
+- **Audio multipista OBS:** reproducción sincronizada de las pistas locales, con mute, solo y volumen independientes.
+- **Ondas de audio reales:** picos y silencios por pista en intervalos de 100 ms, alineados con el video al hacer zoom o desplazarse.
+- **Preparación progresiva:** detección de canales, generación de ondas y porcentaje de procesamiento visible.
+- **Vista previa ampliable:** video ajustado al espacio disponible y previsualización durante el arrastre del cabezal.
+- **Exportación multipista:** los cortes conservan las pistas de audio del archivo fuente. Los controles de mezcla se aplican a la escucha en el editor.
+- Incluye **ClipScore**, exportación por categoría e iconos de Windows de la versión anterior.
+
+## Capturas de la interfaz
+
+Captura de CutterGold 0.1.0 con dos pistas de audio y sus controles independientes.
+El patrón de colores pertenece al video de demostración.
+
+### Ondas independientes y controles por pista
+
+![Timeline con dos pistas, sus formas de onda reales, controles M/S y volumen](assets/images/cuttergold-0.1.0-waveforms.png)
+
+La captura se puede regenerar después de compilar con
+`npx electron scripts/capture-interface.mjs`.
+
+## Timeline multipista para OBS
+
+La timeline inferior muestra la pista de video, una forma de onda por cada pista
+de audio del archivo local y los cortes en la misma escala de tiempo. Carga la
+grabación OBS MKV o MP4 y CutterGold detecta hasta ocho pistas. **M** silencia
+una pista, **S** permite escuchar solo las pistas seleccionadas y el control de
+volumen mezcla cada canal. Al mover el cabezal o reproducir, las pistas extraídas
+se mantienen sincronizadas con la vista previa. Los rangos de clip aparecen sobre
+cada forma de onda y sus exportaciones conservan todas las pistas de audio.
+
+FFmpeg genera previews AAC temporales independientes por canal y una forma de
+onda a intervalos de 100 ms. Los previews se guardan en una carpeta temporal. Las pistas múltiples se preparan únicamente para archivos locales;
+los streams de Twitch/YouTube siguen usando la reproducción que ya tenían.
+
+Al importar el archivo, espera a que termine la preparación para escuchar todas
+las pistas. Las ondas aparecen progresivamente. Si vienes de una compilación
+anterior con ondas planas, vuelve a cargar el video para regenerarlas.
 
 ## Instalación y actualización en Windows
 
-1. Descarga y ejecuta `CutterGold-Setup-0.0.9-x64.exe`.
+1. Descarga y ejecuta `CutterGold-Setup-0.1.0-x64.exe`.
 2. Selecciona la carpeta de instalación y completa el asistente.
 3. Abre **CutterGold** desde el escritorio o el menú Inicio.
 
-La versión 0.0.9 incorpora el icono multirresolución en el ejecutable, instalador,
+Desde la versión 0.0.9 se incorpora el icono multirresolución en el ejecutable, instalador,
 desinstalador y ventana. El acceso directo del escritorio usa el icono instalado
 en `resources/icon.ico`. Las instalaciones y actualizaciones reparan el acceso
 directo y notifican el cambio a Windows, sin borrar la caché global de iconos.
 Si vienes de una versión sin acceso directo, ejecutar este instalador lo restaura;
 no es necesario eliminar tus videos ni la configuración de la aplicación.
 
-## Novedades de 0.0.9
+## Historial: 0.0.9
 
 - **ClipScore:** revisión por clip, cinco preguntas, puntuación de 0–10 y resumen.
 - **Exportación por categoría:** Excelente, Bueno, Dudoso y Descartar; selección

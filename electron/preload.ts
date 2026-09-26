@@ -30,7 +30,36 @@ interface ExportResult {
   cancelled?: boolean;
 }
 
+interface MediaAudioTrack {
+  id: string;
+  streamIndex: number;
+  name: string;
+  codec: string;
+  sampleRate: number;
+  channels: string;
+  duration: number;
+  previewSrc: string;
+  peaks: number[];
+  progress: number;
+  status: 'processing' | 'ready' | 'error';
+}
+
+interface AudioAnalysisProgress {
+  requestId: string;
+  current: number;
+  total: number;
+  percentage: number;
+  track?: MediaAudioTrack;
+}
+
 contextBridge.exposeInMainWorld('api', {
+  analyzeAudioTracks: (videoPath: string, requestId?: string): Promise<MediaAudioTrack[]> => ipcRenderer.invoke('analyze-audio-tracks', videoPath, requestId),
+  releaseAudioPreviews: (ids: string[]): Promise<void> => ipcRenderer.invoke('release-audio-previews', ids),
+  onAudioAnalysisProgress: (callback: (progress: AudioAnalysisProgress) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, value: AudioAnalysisProgress) => callback(value);
+    ipcRenderer.on('audio-analysis-progress', listener);
+    return () => ipcRenderer.removeListener('audio-analysis-progress', listener);
+  },
   getClipScoreSettings: () => ipcRenderer.invoke('clipscore-settings-get'),
   saveClipScoreSettings: (settings: { apiKey?: string; model: string }) => ipcRenderer.invoke('clipscore-settings-save', settings),
   clipScoreSuggestion: (stats: { counts: Record<string, number>; duration: number }) => ipcRenderer.invoke('clipscore-suggestion', stats),

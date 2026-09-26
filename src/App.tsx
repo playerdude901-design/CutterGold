@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { Video, FolderOpen, Download, Play, Pause, Trash2, Plus, Link as LinkIcon } from 'lucide-react';
+import { Video, FolderOpen, Download, Play, Pause, Trash2, Plus, Link as LinkIcon, AudioLines, Maximize2, Minimize2 } from 'lucide-react';
 import Hls from 'hls.js';
 import './App.css';
 import { ClipScore } from './clipscore/ClipScore';
 import { Settings } from './clipscore/Settings';
 import type { Clip, Reviews } from './clipscore/model';
+import { AudioWaveform } from './AudioWaveform';
+import type { AudioTrack } from './media-audio';
 
 const COLORS = [
   { name: 'Red', value: '#ef4444' },
@@ -38,6 +40,10 @@ function App() {
   const [showClipScore, setShowClipScore] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [reviews, setReviews] = useState<Reviews>({});
+  const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
+  const [audioStatus, setAudioStatus] = useState('');
+  const [audioProgress, setAudioProgress] = useState<{ current: number; total: number; percentage: number } | null>(null);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
 
   // Interactive States
   const [activeClipId, setActiveClipId] = useState<string | null>(null);
@@ -58,6 +64,9 @@ function App() {
   zoomLevelRef.current = zoomLevel;
   
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioElementsRef = useRef<Record<string, HTMLAudioElement | null>>({});
+  const audioTracksRef = useRef(audioTracks);
+  audioTracksRef.current = audioTracks;
   const currentTimeRef = useRef<number>(currentTime);
   currentTimeRef.current = currentTime;
   
@@ -66,11 +75,95 @@ function App() {
   
   const isPlayingRef = useRef<boolean>(isPlaying);
   isPlayingRef.current = isPlaying;
+  const audioRequestIdRef = useRef('');
+  const wasPlayingBeforeScrubRef = useRef(false);
   
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const trackControlRowsRef = useRef<HTMLDivElement | null>(null);
   const timelineTrackRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+
+  const releaseAudioTracks = () => {
+    const tracks = audioTracksRef.current;
+    for (const track of tracks) {
+      const element = audioElementsRef.current[track.id];
+      if (element) { element.pause(); element.removeAttribute('src'); element.load(); }
+      delete audioElementsRef.current[track.id];
+    }
+    audioTracksRef.current = [];
+    setAudioTracks([]);
+    if (tracks.length && window.api) void window.api.releaseAudioPreviews(tracks.map(track => track.id));
+  };
+
+  const syncAudioTracks = (play: boolean, time = videoRef.current?.currentTime ?? 0) => {
+    const hasSolo = audioTracksRef.current.some(track => track.solo);
+    for (const track of audioTracksRef.current) {
+      const audio = audioElementsRef.current[track.id];
+      if (!audio) continue;
+      audio.volume = Math.max(0, Math.min(1, track.volume));
+      audio.muted = track.muted || (hasSolo && !track.solo);
+      if (audio.readyState >= HTMLMediaElement.HAVE_METADATA && Math.abs(audio.currentTime - time) > 0.35) {
+        audio.currentTime = Math.min(time, Number.isFinite(audio.duration) ? audio.duration : time);
+      }
+      if (play) void audio.play().catch(() => setAudioStatus('Pulsa Reproducir para escuchar las pistas OBS.'));
+      else audio.pause();
+    }
+  };
+
+  const updateAudioTrack = (id: string, update: Partial<Pick<AudioTrack, 'muted' | 'solo' | 'volume'>>) => {
+    setAudioTracks(previous => previous.map(track => track.id === id ? { ...track, ...update } : track));
+  };
+
+  useEffect(() => {
+    if (!videoFile || !window.api || videoFile.startsWith('blob:') || /^https?:/i.test(videoFile)) {
+      setAudioStatus(videoFile ? 'Pistas adicionales disponibles en archivos locales multicanal.' : '');
+      return;
+    }
+    let stale = false;
+    let generated: AudioTrack[] = [];
+    const requestId = crypto.randomUUID();
+    audioRequestIdRef.current = requestId;
+    setAudioTracks([]);
+    setAudioProgress(null);
+    setAudioStatus('Analizando las pistas de audio de OBS…');
+    void window.api.analyzeAudioTracks(videoFile, requestId).then(discovered => {
+      generated = discovered.map(track => {
+        const current = audioTracksRef.current.find(existing => existing.id === track.id);
+        return { ...track, peaks: Float32Array.from(track.peaks), volume: current?.volume ?? 0.85, muted: current?.muted ?? false, solo: current?.solo ?? false };
+      });
+      if (stale) {
+        void window.api.releaseAudioPreviews(generated.map(track => track.id));
+        return;
+      }
+      audioTracksRef.current = generated;
+      setAudioTracks(generated);
+      setAudioProgress(null);
+      setAudioStatus(generated.length ? `${generated.length} pistas de audio detectadas · ondas a 0.1 s` : 'El archivo no contiene pistas de audio separadas.');
+    }).catch(error => {
+      if (!stale) { setAudioTracks([]); setAudioStatus(`No se pudieron leer las pistas de audio: ${error instanceof Error ? error.message : 'archivo no compatible'}`); }
+    });
+    return () => {
+      stale = true;
+      if (generated.length) void window.api.releaseAudioPreviews(generated.map(track => track.id));
+    };
+  }, [videoFile]);
+
+  useEffect(() => window.api?.onAudioAnalysisProgress(progress => {
+    if (progress.requestId !== audioRequestIdRef.current) return;
+    setAudioProgress(progress.current > 0 ? { current: progress.current, total: progress.total, percentage: progress.percentage } : null);
+    if (progress.track) {
+      const previous = audioTracksRef.current;
+      const existing = previous.find(track => track.id === progress.track?.id);
+      const updated: AudioTrack = { ...progress.track, peaks: Float32Array.from(progress.track.peaks), volume: existing?.volume ?? 0.85, muted: existing?.muted ?? false, solo: existing?.solo ?? false };
+      const next = [...previous.filter(track => track.id !== updated.id), updated].sort((a, b) => a.streamIndex - b.streamIndex);
+      audioTracksRef.current = next;
+      setAudioTracks(next);
+    }
+    setAudioStatus(`Generando vista previa y ondas · ${Math.round(progress.percentage)}%`);
+  }), []);
+
+  useEffect(() => { syncAudioTracks(isPlaying, currentTime); }, [audioTracks, isPlaying]);
 
   useEffect(() => {
     if (window.api && window.api.onExportProgress) {
@@ -84,6 +177,7 @@ function App() {
     if (window.api) {
       const filePath = await window.api.selectVideo();
       if (filePath) {
+        releaseAudioTracks();
         setVideoFile(filePath);
         setVideoSrc(`file://${filePath}`);
         setClips([]);
@@ -99,6 +193,7 @@ function App() {
         const file = target.files ? target.files[0] : null;
         if (file) {
           const objectUrl = URL.createObjectURL(file);
+          releaseAudioTracks();
           setVideoFile(objectUrl);
           setVideoSrc(objectUrl);
           setClips([]);
@@ -127,6 +222,7 @@ function App() {
   };
 
   const applyStreamUrl = (url: string) => {
+    releaseAudioTracks();
     setVideoFile(url);
     setVideoSrc(url);
     setClips([]);
@@ -326,11 +422,12 @@ function App() {
   const togglePlay = () => {
     if (videoRef.current) {
       if (isPlayingRef.current) {
+        syncAudioTracks(false);
         videoRef.current.pause();
       } else {
-        videoRef.current.play();
+        syncAudioTracks(true);
+        void videoRef.current.play().catch(() => setAudioStatus('No se pudo reproducir este archivo.'));
       }
-      setIsPlaying(prev => !prev);
     }
   };
 
@@ -338,6 +435,7 @@ function App() {
     if (videoRef.current && !dragInfoRef.current) {
       const newTime = videoRef.current.currentTime;
       setCurrentTime(newTime);
+      syncAudioTracks(isPlayingRef.current, newTime);
       
       // Auto-scroll timeline to keep playhead in view when playing
       if (isPlayingRef.current && timelineScrollRef.current) {
@@ -384,6 +482,7 @@ function App() {
     const pos = (e.clientX - rect.left) / zoomLevelRef.current;
     const newTime = Math.max(0, Math.min(pos, dur));
     videoRef.current.currentTime = newTime;
+    syncAudioTracks(isPlayingRef.current, newTime);
     setCurrentTime(newTime);
     setActiveClipId(null);
   };
@@ -392,6 +491,7 @@ function App() {
     setActiveClipId(clip.id);
     if (videoRef.current) {
       videoRef.current.currentTime = clip.startTime;
+      syncAudioTracks(isPlayingRef.current, clip.startTime);
       setCurrentTime(clip.startTime);
     }
     if (timelineScrollRef.current) {
@@ -459,12 +559,17 @@ function App() {
 
   const handlePlayheadMouseDown = (e: React.MouseEvent) => {
     e.stopPropagation();
+    wasPlayingBeforeScrubRef.current = isPlayingRef.current;
     setDragInfo({
       id: 'playhead',
       type: 'playhead',
       startX: e.clientX,
       initialStart: currentTimeRef.current
     });
+    if (!isPlayingRef.current) {
+      syncAudioTracks(true, currentTimeRef.current);
+      void videoRef.current?.play().catch(() => {});
+    }
   };
 
   // Smooth 60fps Playhead Sync during Video Playback
@@ -497,7 +602,7 @@ function App() {
     return () => {
       if (animFrameId) cancelAnimationFrame(animFrameId);
     };
-  }, [isPlaying]);
+  }, [isPlaying, audioTracks]);
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     const dragInfo = dragInfoRef.current;
@@ -511,6 +616,8 @@ function App() {
         if (videoRef.current) {
           videoRef.current.currentTime = newTime;
         }
+        syncAudioTracks(true, newTime);
+        if (videoRef.current?.paused) void videoRef.current.play().catch(() => {});
         setCurrentTime(newTime);
       }
       return;
@@ -546,9 +653,11 @@ function App() {
       if (videoRef.current) {
         if (dragInfo.type === 'start' || dragInfo.type === 'move') {
           videoRef.current.currentTime = newStart;
+          syncAudioTracks(isPlayingRef.current, newStart);
           setCurrentTime(newStart);
         } else if (dragInfo.type === 'end') {
           videoRef.current.currentTime = newEnd;
+          syncAudioTracks(isPlayingRef.current, newEnd);
           setCurrentTime(newEnd);
         }
       }
@@ -558,9 +667,14 @@ function App() {
   }, []);
 
   const handleMouseUp = useCallback(() => {
+    if (dragInfoRef.current?.type === 'playhead' && !wasPlayingBeforeScrubRef.current) {
+      videoRef.current?.pause();
+      syncAudioTracks(false);
+    }
     if (dragInfoRef.current) {
       setDragInfo(null);
     }
+    wasPlayingBeforeScrubRef.current = false;
   }, []);
 
   useEffect(() => {
@@ -589,10 +703,11 @@ function App() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || !duration) return;
+    const rulerDuration = Math.max(duration, ...audioTracks.map(track => track.duration));
     
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const width = duration * zoomLevel;
+    const width = rulerDuration * zoomLevel;
     const height = 40; // canvas height
 
     // Adjust canvas resolution for retina displays
@@ -626,7 +741,7 @@ function App() {
 
     const showMs = majorStep < 1;
 
-    for (let t = 0; t <= duration; t += minorStep) {
+    for (let t = 0; t <= rulerDuration; t += minorStep) {
       const x = t * zoomLevel;
       
       // Floating point math safe modulo
@@ -638,11 +753,11 @@ function App() {
       ctx.fillRect(x - 0.5, height - lineH, 1, lineH);
 
       // Draw text for major ticks or first/last
-      if (isMajor || t === 0 || t === Math.floor(duration)) {
+      if (isMajor || t === 0 || t === Math.floor(rulerDuration)) {
         ctx.fillText(formatTimeCanvas(t, showMs), x, 2);
       }
     }
-  }, [duration, zoomLevel]);
+  }, [duration, zoomLevel, audioTracks.length, audioTracks.map(track => track.duration).join(',')]);
 
   const formatTime = (timeInSeconds: number, showMs = false) => {
     const hrs = Math.floor(timeInSeconds / 3600);
@@ -671,7 +786,13 @@ function App() {
   };
 
   const activeClip = clips.find(c => c.id === activeClipId);
-  const trackWidth = duration * zoomLevel;
+  const timelineDuration = Math.max(duration, ...audioTracks.map(track => track.duration));
+  const trackWidth = timelineDuration * zoomLevel;
+  const laneHeight = 76;
+  const videoLaneHeight = 56;
+  const rulerHeight = 40;
+  const timelineTrackHeight = rulerHeight + videoLaneHeight + audioTracks.length * laneHeight + 8;
+  const hasSoloTrack = audioTracks.some(track => track.solo);
 
   const clipsByColor = COLORS.map(c => ({
     ...c,
@@ -686,7 +807,7 @@ function App() {
         <h1 className="app-title">
           <span className="text-grey">Cutter</span>
           <span className="text-gold-shine">Gold</span>
-          <span className="brand-badge">v0.0.9 PRO</span>
+          <span className="brand-badge">v0.1.0 PRO</span>
         </h1>
         <div style={{ display: 'flex', gap: '10px' }}>
           <button className="btn btn-secondary" onClick={() => setShowSettings(true)}>Settings</button>
@@ -700,276 +821,141 @@ function App() {
         </div>
       </header>
 
-      <main className="main-content">
-        <section className="video-section">
-          <div className="video-container glass-panel">
-            {videoSrc ? (
-              <video
+      <main className={`main-content ${previewExpanded ? 'preview-expanded' : ''}`}>
+        <div className="editor-top">
+          <section className="video-section">
+            <div className="video-container glass-panel">
+              {videoSrc ? <video
                 ref={videoRef}
                 className="video-element"
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
+                onPlay={() => { setIsPlaying(true); syncAudioTracks(true); }}
+                onPause={() => { setIsPlaying(false); syncAudioTracks(false); }}
+                onSeeking={() => syncAudioTracks(isPlayingRef.current)}
+                muted={audioTracks.some(track => track.status === 'ready')}
                 onClick={togglePlay}
-              />
-            ) : (
-              <div className="placeholder-video">
-                <div className="placeholder-icon-wrap">
-                  <Video size={36} />
-                </div>
-                <div>
-                  <h3 style={{ fontSize: '1.2rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '4px' }}>Sin video seleccionado</h3>
-                  <p style={{ fontSize: '0.88rem', color: 'var(--text-muted)' }}>Carga un video local o añade un enlace de Twitch para comenzar a editar</p>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="timeline-container glass-panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-              <span style={{ fontSize: '0.9rem', color: 'var(--accent-primary)', fontWeight: 'bold' }}>{formatTime(currentTime)}</span>
-              <button className="btn" style={{ padding: '5px 10px' }} onClick={togglePlay}>
-                {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+              /> : <div className="placeholder-video">
+                <div className="placeholder-icon-wrap"><Video size={36} /></div>
+                <div><h3>Sin video seleccionado</h3><p>Importa una grabación OBS local para detectar sus pistas de audio, o carga un VOD.</p></div>
+              </div>}
+              <button className="viewer-expand-btn" onClick={() => setPreviewExpanded(value => !value)} aria-label={previewExpanded ? 'Restaurar espacio de edición' : 'Ampliar vista previa'} aria-pressed={previewExpanded} title={previewExpanded ? 'Restaurar editor' : 'Ampliar vista previa'}>
+                {previewExpanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
               </button>
-              <span style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>{formatTime(duration)}</span>
             </div>
-            
-            <div 
-              className="timeline-scroll-area" 
-              ref={timelineScrollRef}
-              onWheel={handleWheel}
-            >
-              <div 
-                className="timeline-track" 
-                ref={timelineTrackRef} 
-                onClick={handleTimelineClick}
-                style={{ width: duration ? `${trackWidth}px` : '100%', minWidth: '100%' }}
-              >
-                {/* CANVAS RULER */}
-                {duration > 0 && <canvas ref={canvasRef} className="timeline-canvas" />}
-
-                {/* CLIPS */}
-                {clips.map(clip => {
-                  const leftPx = clip.startTime * zoomLevel;
-                  const widthPx = (clip.endTime - clip.startTime) * zoomLevel;
-                  const isActive = clip.id === activeClipId;
-                  
-                  return (
-                    <div 
-                      key={clip.id}
-                      className={`clip-marker ${isActive ? 'active' : ''}`}
-                      style={{
-                        left: `${leftPx}px`,
-                        width: `${widthPx}px`,
-                        backgroundColor: clip.colorValue,
-                        zIndex: isActive ? 10 : 1
-                      }}
-                      onMouseDown={(e) => handleClipMouseDown(e, clip.id, 'move')}
-                    >
-                      <div 
-                        className="clip-handle clip-handle-left"
-                        onMouseDown={(e) => handleClipMouseDown(e, clip.id, 'start')}
-                      />
-                      <div 
-                        className="clip-handle clip-handle-right"
-                        onMouseDown={(e) => handleClipMouseDown(e, clip.id, 'end')}
-                      />
-                    </div>
-                  )
-                })}
-
-                {/* DRAGGABLE PLAYHEAD */}
-                <div 
-                  className="playhead" 
-                  style={{ left: `${currentTime * zoomLevel}px` }} 
-                >
-                  <div className="playhead-handle" onMouseDown={handlePlayheadMouseDown} />
+          </section>
+          <aside className="sidebar glass-panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h2>Clips ({clips.length})</h2>
+              <button className="btn" onClick={addClip} disabled={!videoSrc}><Plus size={18} /> Add Clip</button>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {activeClip && <div className="active-clip-editor" style={{ border: '1px solid var(--accent-primary)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h3 style={{ color: 'var(--accent-primary)', margin: 0 }}>Editar Selección</h3>
+                  <button onClick={() => setActiveClipId(null)} className="track-dismiss" aria-label="Cerrar edición">×</button>
                 </div>
+                <div className="clip-times" style={{ margin: '15px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {(['start', 'end'] as const).map(type => <label key={type} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <strong style={{ width: '40px' }}>{type === 'start' ? 'In:' : 'Out:'}</strong>
+                    <input type="text"
+                      value={editingTime.id === activeClip.id && editingTime.type === type ? editingTime.value : formatTime(type === 'start' ? activeClip.startTime : activeClip.endTime, true)}
+                      onChange={e => setEditingTime({ id: activeClip.id, type, value: e.target.value })}
+                      onFocus={e => setEditingTime({ id: activeClip.id, type, value: e.currentTarget.value })}
+                      onBlur={e => { handleTimeEdit(activeClip.id, type, e.target.value); setEditingTime({ id: null, type: null, value: '' }); }}
+                      onKeyDown={e => { if (e.key === 'Enter') { handleTimeEdit(activeClip.id, type, e.currentTarget.value); e.currentTarget.blur(); } }}
+                      style={{ flex: 1, padding: '6px', background: 'rgba(0,0,0,.35)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '5px', fontFamily: 'monospace' }}
+                    />
+                  </label>)}
+                </div>
+                <p style={{ marginBottom: '8px' }}>Color de clip</p>
+                <div className="color-picker" style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                  {COLORS.map(color => <button key={color.name} className={`color-swatch ${activeClip.color === color.name ? 'active' : ''}`} style={{ backgroundColor: color.value, width: '26px', height: '26px' }} onClick={() => updateActiveClipColor(color)} title={color.name} aria-label={`Color ${color.name}`} />)}
+                </div>
+                <button className="btn" style={{ width: '100%', backgroundColor: 'var(--danger)', color: 'white' }} onClick={e => removeClip(activeClip.id, e)}><Trash2 size={16} /> Eliminar Clip</button>
+              </div>}
+              <div className="clips-filter-list">
+                <h3 style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '15px', borderBottom: '1px solid var(--glass-border)', paddingBottom: '10px' }}>Resumen de Cortes</h3>
+                {clipsByColor.length === 0 ? <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '20px', fontSize: '0.9rem' }}>No hay clips creados.</div> :
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                    {clipsByColor.map(category => <div key={category.name} style={{ background: 'rgba(0,0,0,.2)', padding: '10px', borderRadius: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
+                        <span className="clip-summary-dot" style={{ backgroundColor: category.value }} /><strong style={{ fontSize: '0.9rem' }}>{category.name}</strong><span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{category.items.length} clips</span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                        {category.items.map((clip, index) => <button key={clip.id} onClick={() => jumpToClip(clip)} className={`clip-nav-btn ${activeClipId === clip.id ? 'active' : ''}`} style={{ borderLeft: `3px solid ${clip.colorValue}` }}>Clip {index + 1}</button>)}
+                      </div>
+                    </div>)}
+                  </div>}
+              </div>
+            </div>
+            <div className="sidebar-export">
+              <button className="btn btn-secondary" onClick={handleSelectOutputDir} style={{ width: '100%', padding: '10px', justifyContent: 'space-between', fontSize: '.84rem' }}>
+                <span className="output-directory"><FolderOpen size={18} /><span>{outputDir || 'Seleccionar Carpeta Destino'}</span></span>{outputDir && <span style={{ color: 'var(--success)' }}>✓</span>}
+              </button>
+              <div><p style={{ margin: '8px 0', fontSize: '.82rem', color: 'var(--gold-light)' }}><strong>Calidad</strong></p>
+                <div className="quality-options">{([['fhd', '1080p'], ['hd', '720p'], ['source', 'Original']] as const).map(([quality, label]) => <label key={quality}><input type="radio" name="quality" value={quality} checked={exportQuality === quality} onChange={() => setExportQuality(quality)} /> {label}</label>)}</div>
+              </div>
+              <button className="btn btn-gold-glow" style={{ width: '100%', padding: '12px' }} onClick={handleExport} disabled={!videoFile || !outputDir || !clips.length || exporting}>{exporting ? 'Exportando…' : <><Download size={18} /> Exportar {clips.length} {clips.length === 1 ? 'clip' : 'clips'}</>}</button>
+            </div>
+          </aside>
+        </div>
+
+        <section className="timeline-container glass-panel" aria-label="Timeline multipista">
+          <div className="multitrack-toolbar">
+            <div className="sequence-heading"><span className="sequence-icon"><AudioLines size={17} /></span><div><strong>SECUENCIA</strong><span>{videoFile?.split(/[\\/]/).pop() ?? 'Nueva secuencia OBS'}</span></div></div>
+            <div className="timeline-transport">
+              <code>{formatTime(currentTime, true)}</code>
+              <button className="btn transport-button" onClick={togglePlay} disabled={!videoSrc} aria-label={isPlaying ? 'Pausar' : 'Reproducir'}>{isPlaying ? <Pause size={15} /> : <Play size={15} />}</button>
+              <code>{formatTime(duration, true)}</code>
+            </div>
+            <span className={`audio-analysis-status ${audioTracks.length ? 'has-audio' : ''}`} title={audioStatus}>
+              {audioProgress ? `Pista ${audioProgress.current}/${audioProgress.total} · ${Math.round(audioProgress.percentage)}%` : audioStatus || 'Importa una grabación local multicanal'}
+            </span>
+          </div>
+          {audioProgress && <div className="audio-analysis-progress" role="progressbar" aria-label="Procesamiento de pistas y formas de onda" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(audioProgress.percentage)}>
+            <div className="audio-analysis-progress-fill" style={{ width: `${Math.max(0, Math.min(100, audioProgress.percentage))}%` }} />
+            <span>Preparando pistas de audio · {Math.round(audioProgress.percentage)}%</span>
+          </div>}
+          <div className="multitrack-layout">
+            <div className="track-control-column">
+              <div className="track-ruler-label"><span>PISTAS · M MUTE · S SOLO</span></div>
+              <div className="track-control-rows" ref={trackControlRowsRef}>
+                <div className="track-header video-track-header"><span className="track-index video-index">V1</span><span>Video</span></div>
+                {audioTracks.map((track, index) => <div className="track-header audio-track-header" key={track.id}>
+                  <div className="track-title"><span className="track-index audio-index">A{index + 1}</span><span className="track-name" title={track.name}>{track.name}</span></div>
+                  <div className="track-mix-controls">
+                    <button className={`mix-toggle ${track.muted ? 'mix-active' : ''}`} aria-label={`${track.muted ? 'Activar' : 'Silenciar'} ${track.name}`} aria-pressed={track.muted} onClick={() => updateAudioTrack(track.id, { muted: !track.muted })}>M</button>
+                    <button className={`mix-toggle ${track.solo ? 'solo-active' : ''}`} aria-label={`${track.solo ? 'Desactivar solo de' : 'Solo'} ${track.name}`} aria-pressed={track.solo} onClick={() => updateAudioTrack(track.id, { solo: !track.solo })}>S</button>
+                    <input className="track-volume" aria-label={`Volumen ${track.name}`} type="range" min="0" max="1" step="0.01" value={track.volume} onChange={e => updateAudioTrack(track.id, { volume: Number(e.target.value) })} />
+                  </div>
+                </div>)}
+              </div>
+            </div>
+            <div className="timeline-scroll-area timeline-multitrack-scroll" ref={timelineScrollRef} onScroll={e => { if (trackControlRowsRef.current) trackControlRowsRef.current.scrollTop = e.currentTarget.scrollTop; }} onWheel={handleWheel}>
+              <div className="timeline-track multitrack-track" ref={timelineTrackRef} onClick={handleTimelineClick} style={{ width: duration ? `${trackWidth}px` : '100%', minWidth: '100%', height: `${timelineTrackHeight}px` }}>
+                {duration > 0 && <canvas ref={canvasRef} className="timeline-canvas" />}
+                <div className="multitrack-video-lane" style={{ top: rulerHeight, height: videoLaneHeight }}>
+                  <span className="video-placeholder-label">{videoSrc ? 'VISTA DE CLIP' : 'ARRASTRA O ABRE UN VIDEO'}</span>
+                  {clips.map(clip => <div key={clip.id} className={`clip-marker ${activeClipId === clip.id ? 'active' : ''}`} style={{ left: `${clip.startTime * zoomLevel}px`, width: `${(clip.endTime - clip.startTime) * zoomLevel}px`, backgroundColor: clip.colorValue }} onMouseDown={e => handleClipMouseDown(e, clip.id, 'move')}>
+                    <div className="video-clip-label">VIDEO · {formatTime(clip.startTime, true)} – {formatTime(clip.endTime, true)}</div>
+                    <div className="clip-handle clip-handle-left" onMouseDown={e => handleClipMouseDown(e, clip.id, 'start')} />
+                    <div className="clip-handle clip-handle-right" onMouseDown={e => handleClipMouseDown(e, clip.id, 'end')} />
+                  </div>)}
+                </div>
+                {audioTracks.map((track, index) => <div className={`audio-track-lane track-color-${index % 4}`} key={track.id} style={{ top: `${rulerHeight + videoLaneHeight + index * laneHeight}px`, height: laneHeight }}>
+                  <div className="audio-clip-block" style={{ width: `${track.duration * zoomLevel}px`, minWidth: `${track.duration ? Math.min(60, track.duration * zoomLevel) : 0}px` }} onMouseDown={e => e.stopPropagation()}>
+                    <AudioWaveform peaks={track.peaks} duration={track.duration} />
+                    <span className="audio-clip-label">{track.name} · {track.codec} · {track.channels}</span>
+                  </div>
+                  {clips.map(clip => <div key={clip.id} className="audio-clip-selection" aria-hidden="true" style={{ left: `${clip.startTime * zoomLevel}px`, width: `${(clip.endTime - clip.startTime) * zoomLevel}px`, backgroundColor: clip.colorValue, opacity: 0.12 }} />)}
+                {track.status === 'ready' && track.previewSrc && <audio ref={element => { audioElementsRef.current[track.id] = element; }} src={track.previewSrc} preload="auto" muted={track.muted || (hasSoloTrack && !track.solo)} onLoadedMetadata={() => syncAudioTracks(isPlayingRef.current, currentTimeRef.current)} />}
+                </div>)}
+                <div className="playhead" style={{ left: `${currentTime * zoomLevel}px`, height: `${timelineTrackHeight}px` }}><div className="playhead-handle" onMouseDown={handlePlayheadMouseDown} /></div>
               </div>
             </div>
           </div>
         </section>
-
-        <aside className="sidebar glass-panel">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h2>Clips ({clips.length})</h2>
-            <button className="btn" onClick={addClip} disabled={!videoSrc}>
-              <Plus size={18} /> Add Clip
-            </button>
-          </div>
-          
-          <div style={{ flex: 1, overflowY: 'auto', marginTop: '15px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            
-            {/* Active Clip Editor */}
-            {activeClip && (
-              <div className="active-clip-editor" style={{ border: '1px solid var(--accent-primary)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h3 style={{ color: 'var(--accent-primary)', margin: 0 }}>Editar Selección</h3>
-                  <button onClick={() => setActiveClipId(null)} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.2rem' }}>&times;</button>
-                </div>
-                <div className="clip-times" style={{ margin: '15px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <strong style={{ width: '40px' }}>In:</strong> 
-                    <input 
-                      type="text" 
-                      value={editingTime.id === activeClip.id && editingTime.type === 'start' ? editingTime.value : formatTime(activeClip.startTime, true)}
-                      onChange={(e) => setEditingTime({ id: activeClip.id, type: 'start', value: e.target.value })}
-                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'start', value: formatTime(activeClip.startTime, true) })}
-                      onBlur={(e) => {
-                        handleTimeEdit(activeClip.id, 'start', e.target.value);
-                        setEditingTime({ id: null, type: null, value: '' });
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleTimeEdit(activeClip.id, 'start', (e.target as HTMLInputElement).value);
-                          setEditingTime({ id: null, type: null, value: '' });
-                        }
-                      }}
-                      style={{ flex: 1, padding: '5px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', fontFamily: 'monospace' }}
-                    />
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <strong style={{ width: '40px' }}>Out:</strong> 
-                    <input 
-                      type="text" 
-                      value={editingTime.id === activeClip.id && editingTime.type === 'end' ? editingTime.value : formatTime(activeClip.endTime, true)}
-                      onChange={(e) => setEditingTime({ id: activeClip.id, type: 'end', value: e.target.value })}
-                      onFocus={() => setEditingTime({ id: activeClip.id, type: 'end', value: formatTime(activeClip.endTime, true) })}
-                      onBlur={(e) => {
-                        handleTimeEdit(activeClip.id, 'end', e.target.value);
-                        setEditingTime({ id: null, type: null, value: '' });
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleTimeEdit(activeClip.id, 'end', (e.target as HTMLInputElement).value);
-                          setEditingTime({ id: null, type: null, value: '' });
-                        }
-                      }}
-                      style={{ flex: 1, padding: '5px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid var(--glass-border)', color: 'white', borderRadius: '4px', fontFamily: 'monospace' }}
-                    />
-                  </div>
-                </div>
-                
-                <div style={{ marginBottom: '20px' }}>
-                  <p style={{ marginBottom: '10px' }}>Color (Carpeta de destino):</p>
-                  <div className="color-picker" style={{ display: 'flex', gap: '10px' }}>
-                    {COLORS.map(c => (
-                      <div 
-                        key={c.name}
-                        className={`color-swatch ${activeClip.color === c.name ? 'active' : ''}`}
-                        style={{ backgroundColor: c.value, width: '32px', height: '32px' }}
-                        onClick={() => updateActiveClipColor(c)}
-                        title={c.name}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <button className="btn" style={{ width: '100%', backgroundColor: 'var(--danger)', color: 'white' }} onClick={(e) => removeClip(activeClip.id, e)}>
-                  <Trash2 size={16} /> Eliminar Clip
-                </button>
-              </div>
-            )}
-
-            {/* Clips List & Filter */}
-            <div className="clips-filter-list">
-              <h3 style={{ fontSize: '1rem', color: 'var(--text-secondary)', marginBottom: '15px', borderBottom: '1px solid var(--glass-border)', paddingBottom: '10px' }}>
-                Resumen de Cortes
-              </h3>
-              
-              {clipsByColor.length === 0 ? (
-                 <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '20px', fontSize: '0.9rem' }}>
-                   No hay clips creados.
-                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                  {clipsByColor.map(category => (
-                    <div key={category.name} style={{ background: 'rgba(0,0,0,0.2)', padding: '10px', borderRadius: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-                        <div style={{ width: '12px', height: '12px', borderRadius: '50%', backgroundColor: category.value }} />
-                        <strong style={{ fontSize: '0.9rem' }}>{category.name}</strong>
-                        <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>{category.items.length} clips</span>
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                        {category.items.map((clip, index) => {
-                          const isActive = activeClipId === clip.id;
-                          return (
-                            <button 
-                              key={clip.id}
-                              onClick={() => jumpToClip(clip)}
-                              className={`clip-nav-btn ${isActive ? 'active' : ''}`}
-                              style={{
-                                borderLeft: isActive ? undefined : `3px solid ${clip.colorValue}`
-                              }}
-                            >
-                              <span style={{
-                                width: '8px',
-                                height: '8px',
-                                borderRadius: '50%',
-                                backgroundColor: isActive ? '#090a0f' : clip.colorValue,
-                                display: 'inline-block'
-                              }} />
-                              Clip {index + 1}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div style={{ borderTop: '1px solid var(--glass-border)', paddingTop: '15px', marginTop: 'auto' }}>
-            <div style={{ marginBottom: '12px' }}>
-              <button 
-                className="btn btn-secondary"
-                onClick={handleSelectOutputDir}
-                style={{ 
-                  width: '100%',
-                  padding: '11px 14px', 
-                  justifyContent: 'space-between',
-                  fontSize: '0.86rem'
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '85%' }}>
-                  <FolderOpen size={18} />
-                  <span>{outputDir ? outputDir : 'Seleccionar Carpeta Destino'}</span>
-                </span>
-                {outputDir && <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>✓</span>}
-              </button>
-            </div>
-            
-            <div style={{ marginBottom: '15px' }}>
-              <p style={{ marginBottom: '8px', fontSize: '0.85rem', color: 'var(--gold-light)' }}><strong>Calidad de Exportación:</strong></p>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="fhd" checked={exportQuality === 'fhd'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
-                  FHD (1080p)
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="hd" checked={exportQuality === 'hd'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
-                  HD (720p)
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  <input type="radio" name="quality" value="source" checked={exportQuality === 'source'} onChange={(e) => setExportQuality(e.target.value as 'source' | 'hd' | 'fhd')} />
-                  Original
-                </label>
-              </div>
-            </div>
-
-            <button 
-              className="btn btn-gold-glow" 
-              style={{ width: '100%', padding: '14px', fontSize: '1.05rem' }}
-              onClick={handleExport}
-              disabled={!videoFile || !outputDir || clips.length === 0 || exporting}
-            >
-              {exporting ? 'Exportando...' : <><Download size={20} /> Exportar {clips.length} {clips.length === 1 ? 'Clip' : 'Clips'}</>}
-            </button>
-          </div>
-        </aside>
       </main>
       {/* Export Progress Modal */}
       {exporting && exportProgress && (
@@ -1112,18 +1098,18 @@ function App() {
         </div>
       )}
 
-      {/* Release 0.0.9 Notice Modal */}
+      {/* Release 0.1.0 Notice Modal */}
       {showUpdateNotice && (
         <div className="modal-overlay">
           <div className="modal-content" style={{ padding: '30px', maxWidth: '450px', textAlign: 'center' }}>
-            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.0.9!</h2>
-            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>ClipScore e iconos de Windows</h3>
+            <h2 style={{ color: 'var(--gold)', marginBottom: '15px', fontSize: '1.8rem' }}>¡CutterGold 0.1.0!</h2>
+            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '20px', fontSize: '1.2rem' }}>Timeline multipista y ondas de audio</h3>
             <ul style={{ textAlign: 'left', color: 'var(--text-secondary)', marginBottom: '25px', lineHeight: '1.6', fontSize: '0.95rem', paddingLeft: '20px' }}>
-              <li><strong>CLIPSCORE:</strong> Revisa y califica tus clips con cinco preguntas y un score de 0 a 10.</li>
-              <li><strong>EXPORTACIÓN:</strong> Organiza los archivos por categoría sin sobrescribir tus clips anteriores.</li>
-              <li><strong>SUGERENCIAS:</strong> Consejos locales de edición u OpenRouter opcional desde Settings.</li>
-              <li><strong>WINDOWS:</strong> Iconos del ejecutable, instalador y desinstalador; reparación del acceso directo del escritorio.</li>
-              <li><strong>PRECISIÓN:</strong> Tiempos con milisegundos y cancelación de exportaciones corregida.</li>
+              <li><strong>MULTIPISTA OBS:</strong> Escucha tus pistas sincronizadas y ajusta mute, solo y volumen por canal.</li>
+              <li><strong>ONDAS REALES:</strong> Visualiza los picos y silencios de cada pista, alineados con la timeline.</li>
+              <li><strong>PROCESAMIENTO:</strong> Sigue el porcentaje de preparación del audio y sus ondas.</li>
+              <li><strong>VISTA PREVIA:</strong> Amplía el reproductor y previsualiza mientras arrastras el cabezal.</li>
+              <li><strong>EXPORTACIÓN:</strong> Conserva las pistas de audio originales al exportar tus cortes.</li>
             </ul>
             <button className="btn btn-gold-glow" style={{ padding: '10px 30px', fontSize: '1.1rem' }} onClick={() => setShowUpdateNotice(false)}>
               Enterado

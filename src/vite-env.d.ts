@@ -10,6 +10,24 @@ interface ImportMeta {
 
 interface Window {
   api: {
+    analyzeAudioTracks: (videoPath: string, requestId?: string) => Promise<Array<{
+      id: string
+      streamIndex: number
+      name: string
+      codec: string
+      sampleRate: number
+      channels: string
+      duration: number
+      previewSrc: string
+      peaks: number[]
+      progress: number
+      status: 'processing' | 'ready' | 'error'
+    }>>
+    releaseAudioPreviews: (ids: string[]) => Promise<void>
+    onAudioAnalysisProgress: (callback: (progress: { requestId: string; current: number; total: number; percentage: number; track?: {
+      id: string; streamIndex: number; name: string; codec: string; sampleRate: number; channels: string; duration: number;
+      previewSrc: string; peaks: number[]; progress: number; status: 'processing' | 'ready' | 'error'
+    } }) => void) => (() => void)
     getClipScoreSettings: () => Promise<{ configured: boolean; model: string }>
     saveClipScoreSettings: (settings: { apiKey?: string; model: string }) => Promise<void>
     clipScoreSuggestion: (stats: { counts: Record<string, number>; duration: number }) => Promise<{ text?: string; error?: string }>
